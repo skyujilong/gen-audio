@@ -1,0 +1,18 @@
+# 运行时数据
+data/*
+!data/.gitkeep
+
+# 前端空目录占位
+static/*
+!static/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# 测试 / 工具
+.pytest_cache/
+.superpowers/
