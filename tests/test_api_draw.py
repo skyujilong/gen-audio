@@ -14,10 +14,7 @@ def test_draw_creates_a_card(tmp_path, monkeypatch):
     config.DB_PATH = config.DATA_ROOT / "gen-audio.db"
     init_schema(config.DB_PATH)
 
-    # draw.py 在 import 时已经把 DB_PATH / DATA_ROOT 绑定到模块里了，需要同步 patch 模块内符号
     import app.api.draw as draw_mod
-    monkeypatch.setattr(draw_mod, "DB_PATH", config.DB_PATH)
-    monkeypatch.setattr(draw_mod, "DATA_ROOT", config.DATA_ROOT)
 
     # patch 真实 ChatTTS 推理（用假的 wav 字节 + 一段时间段）
     monkeypatch.setattr(
@@ -60,8 +57,6 @@ def test_draw_with_refiner_text(tmp_path, monkeypatch):
     init_schema(config.DB_PATH)
 
     import app.api.draw as draw_mod
-    monkeypatch.setattr(draw_mod, "DB_PATH", config.DB_PATH)
-    monkeypatch.setattr(draw_mod, "DATA_ROOT", config.DATA_ROOT)
 
     captured: dict = {}
 

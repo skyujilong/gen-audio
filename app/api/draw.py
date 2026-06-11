@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..config import DB_PATH, DATA_ROOT
+# 故意用 `from .. import config` 而非 `from ..config import DB_PATH, DATA_ROOT`：
+# 后者会在 import 时把路径绑定到模块内，测试 monkeypatch `config.DB_PATH` 不生效。
+from .. import config
 from ..core.chat_tts import draw_one, synthesize_to_wav_bytes
 from ..core.params import DEFAULT_DEMO_TEXT, DrawRequest, DrawnCard, TtsParams
 from ..core.subtitle import build_srt
@@ -41,7 +43,7 @@ def draw(req: DrawRequest) -> DrawnCard:
 
     # 3) 先 insert（路径占空）
     card_id = queries.insert_card(
-        DB_PATH,
+        config.DB_PATH,
         name=None,
         params=params,
         demo_text=DEFAULT_DEMO_TEXT,
@@ -51,7 +53,7 @@ def draw(req: DrawRequest) -> DrawnCard:
 
     # 4) 写文件到正确目录
     paths = write_demo_files(
-        data_root=DATA_ROOT,
+        data_root=config.DATA_ROOT,
         card_id=card_id,
         demo_text=DEFAULT_DEMO_TEXT,
         demo_wav_bytes=audio_bytes,
@@ -60,7 +62,7 @@ def draw(req: DrawRequest) -> DrawnCard:
     )
 
     # 5) update 路径
-    with get_connection(DB_PATH) as conn:
+    with get_connection(config.DB_PATH) as conn:
         conn.execute(
             "UPDATE cards SET demo_audio_path = ?, demo_subtitle_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (paths["demo_audio_path"], paths["demo_subtitle_path"], card_id),
