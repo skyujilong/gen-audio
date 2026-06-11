@@ -50,7 +50,7 @@ gen-audio/
 │   │   ├── synthesize.py      # POST /api/synthesize 单条 / 批量合成
 │   │   ├── jobs.py            # /api/jobs CRUD、取消、文件流
 │   │   ├── cards.py           # /api/cards CRUD、收藏切换、试听文件流
-│   │   └── import_export.py   # POST /api/cards/import
+│   │   └── import.py          # POST /api/cards/import
 │   ├── core/
 │   │   ├── chat_tts.py        # ChatTTS 模型加载（单例）、draw_one、synthesize_with_progress
 │   │   ├── params.py          # Pydantic: TtsParams、DrawnCard、Job 等
@@ -125,7 +125,7 @@ gen-audio/
 | `id` | INTEGER PK | 自增 |
 | `name` | TEXT NULL | 用户可改名，方便管理；新建时为 `NULL` |
 | `params` | TEXT (JSON) | 完整 `TtsParams` 序列化 |
-| `demo_text` | TEXT | 抽卡时用的固定 demo 文本 |
+| `demo_text` | TEXT NOT NULL | 抽卡时用的固定 demo 文本；导入时若为空，后端填 `DEFAULT_DEMO_TEXT` |
 | `demo_audio_path` | TEXT | 相对 `data/audio/{id}/demo.wav` |
 | `demo_subtitle_path` | TEXT | `data/audio/{id}/demo.srt` |
 | `is_favorited` | INTEGER (0/1) | 收藏标记 |
@@ -140,6 +140,7 @@ gen-audio/
 |---|---|---|
 | `id` | TEXT PK | UUID |
 | `card_id` | INTEGER NOT NULL | 外键 → `cards.id`，`ON DELETE CASCADE` |
+| `params` | TEXT NOT NULL | 合成时实际使用的 `TtsParams`（JSON）——保存参数快照；不随 `cards.params` 后续变化 |
 | `text` | TEXT NOT NULL | 待合成文本 |
 | `status` | TEXT NOT NULL | `pending` / `running` / `done` / `failed` / `canceled` |
 | `progress` | REAL NOT NULL | 0.0–1.0（ChatTTS 内部 token 进度） |
@@ -189,6 +190,7 @@ class DrawnCard(BaseModel):
 class SynthesizeRequest(BaseModel):
     """单条合成请求。"""
     card_id: int
+    params: TtsParams            # 实际使用的参数（保存快照；不依赖 card.params 后续是否被改）
     text: str
 
 class BatchSynthesizeRequest(BaseModel):
@@ -208,6 +210,7 @@ class Job(BaseModel):
     """合成任务。"""
     id: str                       # UUID
     card_id: int
+    params: TtsParams             # 合成时实际使用的参数（保存快照；不随 cards.params 后续变化）
     text: str
     status: JobStatus
     progress: float
@@ -237,7 +240,7 @@ class CardUpdate(BaseModel):
 class ImportCardItem(BaseModel):
     name: str | None = None
     params: TtsParams
-    demo_text: str | None = None
+    demo_text: str | None = None    # 导入时可空；后端填 DEFAULT_DEMO_TEXT
     is_favorited: bool = False
 
 class ImportRequest(BaseModel):
@@ -269,8 +272,8 @@ class HealthResponse(BaseModel):
 | POST | `/api/synthesize` | 单条合成 | `Job` |
 | POST | `/api/synthesize/batch` | 批量合成 | `list[Job]` |
 | GET | `/api/jobs/{id}` | 查任务 | `Job` |
-| GET | `/api/jobs?status=running,pending&limit=50` | 列任务 | `list[Job]` |
-| DELETE | `/api/jobs/{id}` | 取消任务（仅 `pending`） | 204 |
+| GET | `/api/jobs?status=running,pending&limit=50` | 列任务（`status=` 不传 = 全部；多状态用英文逗号分隔） | `list[Job]` |
+| DELETE | `/api/jobs/{id}` | 取消任务（**仅** `pending` 状态；其他状态返回 409 `JOB_NOT_CANCELLABLE`；**不**删除 DB 记录） | 204 |
 | GET | `/api/jobs/{id}/audio` | 取任务结果音频（`done` 才 200） | `audio/wav` |
 | GET | `/api/jobs/{id}/subtitle` | 取任务结果字幕 | `text/plain` |
 | GET | `/api/jobs/{id}/params.json` | 取参数快照 | `application/json` |
@@ -323,8 +326,8 @@ class ImportFormatError(AppError):        # 400
     code = "IMPORT_INVALID_FORMAT"
     status = 400
 
-class FileNotFoundError(AppError):        # 404
-    code = "FILE_NOT_FOUND"
+class AudioFileNotFoundError(AppError):   # 404
+    code = "AUDIO_FILE_NOT_FOUND"
     status = 404
 
 class JobNotCancellableError(AppError):   # 409
@@ -386,7 +389,11 @@ from .params import JobStatus
 from ..db.queries import update_job_status, update_job_progress
 
 async def worker_loop(job_queue: asyncio.Queue, in_memory: dict):
-    """单个 worker 协程。启动 N 个 = N 路并发。"""
+    """单个 worker 协程。启动 N 个 = N 路并发。
+
+    Note: 提交阶段（POST /api/synthesize）已把 {id, card_id, params, text, status=pending} 写入 DB。
+    worker 阶段仅更新 status=running → done/failed，不重写 params（params 是提交时的快照）。
+    """
     while True:
         job = await job_queue.get()
         try:
@@ -483,13 +490,14 @@ async def worker_loop(job_queue: asyncio.Queue, in_memory: dict):
 
 **按钮语义**：
 - `▶ 试听` / `⬇ 音频/字幕/参数`：仅当 `status=done` 可见可点
-- `❌ 取消`：仅当 `status=pending` 可见可点；`running` 状态**不**提供取消入口
-- `🔄 重试`：仅当 `status=failed` 可见可点；点击 = `POST /api/synthesize` 创建一个**新** job（旧 job 保留为 `failed`，**不**复用 id）
-- `🗑 移除`：仅前端 UI 移除（从任务列表里隐藏）；**不**调后端，不删 DB 记录
+- `❌ 取消`：仅当 `status=pending` 可见可点；点击 = `DELETE /api/jobs/{id}` 取消任务（DB 记录保留为 `canceled`）；`running` 状态**不**提供取消入口
+- `🔄 重试`：仅当 `status=failed` 可见可点；点击 = `POST /api/synthesize`，**用 `job.params`** 创建一个**新** job（旧 job 保留为 `failed`，**不**复用 id）
+- `🙈 隐藏`：仅前端 UI 行为，从任务列表里移除显示；**不调后端 API，不删 DB 记录**——和"取消"是不同概念
 
-**轮询**：
-- 合成页打开即启动轮询，每 2 秒拉一次 `GET /api/jobs?status=running,pending`
-- 仅拉 `pending` + `running`；`done`/`failed`/`canceled` 走"提交后 + 轮询间歇"的局部刷新
+**数据加载**：
+- **首次打开**：调 `GET /api/jobs?limit=100`（`status=` 不传 = 全部），拉最近 100 条作为本会话基线
+- **轮询**：每 2 秒拉一次 `GET /api/jobs?status=running,pending&limit=50`（仅活跃任务）
+- **前端列表**：内存合并"首次加载" + "轮询" + "新提交"；`done` 的任务**保留在 UI** 不消失
 - 离开合成页（路由切换）时停止轮询
 
 ### 9.5 导入 modal
