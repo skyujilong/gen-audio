@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>列表 · gen-audio</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav class="top-nav">
+    <a href="/draw">抽卡</a>
+    <a href="/favorites" class="active">列表</a>
+    <a href="/synthesize">合成</a>
+  </nav>
+  <h1>📚 参数库</h1>
+
+  <div class="row" style="margin-bottom: 16px;">
+    <div class="row" style="gap: 4px;">
+      <button id="tab-all" class="secondary">全部</button>
+      <button id="tab-fav">收藏</button>
+    </div>
+    <button id="import-btn" class="secondary" style="margin-left: auto;">📥 导入</button>
+  </div>
+
+  <div id="cards-list"></div>
+
+  <!-- 导入 modal -->
+  <div id="import-modal" class="modal-bg" style="display:none;">
+    <div class="modal">
+      <h2>导入参数卡</h2>
+      <p class="muted">选择 JSON 文件（格式：<code>{"cards": [{"name": "...", "params": {...}}, ...]}</code>）</p>
+      <input type="file" id="import-file" accept=".json" style="margin: 12px 0;" />
+      <div id="import-preview"></div>
+      <div class="row" style="margin-top: 16px; justify-content: flex-end;">
+        <button class="secondary" id="import-cancel">取消</button>
+        <button id="import-confirm">确认导入</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/favorites.js"></script>
+</body>
+</html>

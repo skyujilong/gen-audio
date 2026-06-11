@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>合成 · gen-audio</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav class="top-nav">
+    <a href="/draw">抽卡</a>
+    <a href="/favorites">列表</a>
+    <a href="/synthesize" class="active">合成</a>
+  </nav>
+  <h1>🎤 批量合成</h1>
+
+  <div style="display: grid; grid-template-columns: 30% 70%; gap: 16px; margin-top: 16px;">
+    <!-- 左栏：卡选择 -->
+    <div>
+      <h2>选卡</h2>
+      <input type="text" id="search" placeholder="搜索卡名/id..." style="margin-bottom: 8px;" />
+      <div id="card-picker" style="max-height: 70vh; overflow-y: auto;"></div>
+    </div>
+
+    <!-- 右栏：任务行列表 -->
+    <div>
+      <div class="row" style="margin-bottom: 12px;">
+        <button id="add-row">+ 添加一行</button>
+        <button id="submit-all" style="margin-left: auto;">🚀 全部提交</button>
+      </div>
+      <div id="rows"></div>
+
+      <p id="queue-status" class="muted" style="margin-top: 16px;"></p>
+    </div>
+  </div>
+
+  <script type="module" src="/js/synthesize.js"></script>
+</body>
+</html>

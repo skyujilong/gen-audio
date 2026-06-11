@@ -1,0 +1,25 @@
+# 运行时数据
+data/*
+!data/.gitkeep
+
+# 前端空目录占位
+static/*
+!static/.gitkeep
+# 跟踪实际的前端代码
+!static/index.html
+!static/draw.html
+!static/favorites.html
+!static/synthesize.html
+!static/css/
+!static/js/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# 测试 / 工具
+.pytest_cache/
+.superpowers/

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>抽卡 · gen-audio</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav class="top-nav">
+    <a href="/draw" class="active">抽卡</a>
+    <a href="/favorites">列表</a>
+    <a href="/synthesize">合成</a>
+  </nav>
+  <h1>🎲 抽卡</h1>
+  <p class="muted">随机生成一组 ChatTTS 参数 + 自动合 demo 试听。</p>
+
+  <div style="margin: 24px 0; text-align: center;">
+    <button id="draw-btn" style="font-size: 16px; padding: 12px 32px;">🎲 抽一张</button>
+  </div>
+
+  <div id="card-panel" style="display:none;">
+    <div class="card">
+      <div class="row" style="margin-bottom: 12px;">
+        <input type="text" id="card-name" placeholder="参数名" style="flex: 1;" />
+        <button id="fav-btn" class="secondary">☆ 收藏</button>
+      </div>
+
+      <audio id="audio" controls></audio>
+      <p class="muted" id="subtitle-display"></p>
+
+      <p class="muted" id="params-summary"></p>
+
+      <div class="row" style="margin-top: 12px;">
+        <a id="to-synthesize" class="tag" style="cursor:pointer">🎤 去合成</a>
+        <button id="discard-btn" class="danger">🗑 丢弃</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/draw.js"></script>
+</body>
+</html>
