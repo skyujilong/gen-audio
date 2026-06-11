@@ -14,7 +14,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import card_import, cards, draw, health, jobs, synthesize
@@ -91,6 +91,33 @@ app.include_router(jobs.router)
 
 
 # === 静态文件（前端） ===
+
+# 干净 URL 路由：/draw → draw.html、/favorites → favorites.html、/synthesize → synthesize.html
+# Starlette StaticFiles 的 html=True 不支持无后缀查找，这里显式注册。
+_PAGE_ROUTES = {
+    "/draw": "draw.html",
+    "/favorites": "favorites.html",
+    "/synthesize": "synthesize.html",
+}
+
+
+@app.get("/draw", include_in_schema=False)
+def _page_draw() -> FileResponse:
+    """干净 URL：/draw → draw.html。"""
+    return FileResponse(STATIC_DIR / "draw.html", media_type="text/html")
+
+
+@app.get("/favorites", include_in_schema=False)
+def _page_favorites() -> FileResponse:
+    """干净 URL：/favorites → favorites.html。"""
+    return FileResponse(STATIC_DIR / "favorites.html", media_type="text/html")
+
+
+@app.get("/synthesize", include_in_schema=False)
+def _page_synthesize() -> FileResponse:
+    """干净 URL：/synthesize → synthesize.html。"""
+    return FileResponse(STATIC_DIR / "synthesize.html", media_type="text/html")
+
 
 # 只有在已经有前端文件（index.html）时才挂载为根路径；
 # 仅含 .gitkeep 的空目录不能挂载，否则会拦截所有非 API 请求。
