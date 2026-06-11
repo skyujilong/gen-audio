@@ -94,12 +94,6 @@ app.include_router(jobs.router)
 
 # 干净 URL 路由：/draw → draw.html、/favorites → favorites.html、/synthesize → synthesize.html
 # Starlette StaticFiles 的 html=True 不支持无后缀查找，这里显式注册。
-_PAGE_ROUTES = {
-    "/draw": "draw.html",
-    "/favorites": "favorites.html",
-    "/synthesize": "synthesize.html",
-}
-
 
 @app.get("/draw", include_in_schema=False)
 def _page_draw() -> FileResponse:
