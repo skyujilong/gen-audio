@@ -50,7 +50,7 @@ gen-audio/
 │   │   ├── synthesize.py      # POST /api/synthesize 单条 / 批量合成
 │   │   ├── jobs.py            # /api/jobs CRUD、取消、文件流
 │   │   ├── cards.py           # /api/cards CRUD、收藏切换、试听文件流
-│   │   └── import.py          # POST /api/cards/import
+│   │   └── card_import.py      # POST /api/cards/import（注意：不用 import.py，Python 关键字）
 │   ├── core/
 │   │   ├── chat_tts.py        # ChatTTS 模型加载（单例）、draw_one、synthesize_with_progress
 │   │   ├── params.py          # Pydantic: TtsParams、DrawnCard、Job 等
