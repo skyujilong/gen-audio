@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,13 @@ from app.db.queries import (
     list_cards,
     update_card,
     delete_card,
+    insert_job,
+    get_job,
+    list_jobs,
+    update_job_status,
+    update_job_progress,
+    delete_job,
+    cleanup_stale_running_jobs,
 )
 from app.core.params import TtsParams
 
@@ -109,3 +117,156 @@ def test_delete_card_removes_row(db: Path):
                       demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
     delete_card(db, cid)
     assert get_card(db, cid) is None
+
+
+def test_insert_job_with_pending_status(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    job_id = str(uuid.uuid4())
+    insert_job(
+        db,
+        id=job_id,
+        card_id=cid,
+        params=_sample_params(),
+        text="hello",
+    )
+    row = get_job(db, job_id)
+    assert row is not None
+    assert row["status"] == "pending"
+    assert row["progress"] == 0.0
+    assert row["text"] == "hello"
+
+
+def test_insert_job_requires_existing_card(db: Path):
+    """FK 约束：card_id 不存在时插入失败。"""
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_job(
+            db,
+            id=str(uuid.uuid4()),
+            card_id=999,
+            params=_sample_params(),
+            text="x",
+        )
+
+
+def test_get_job_returns_none_for_missing(db: Path):
+    assert get_job(db, "no-such-id") is None
+
+
+def test_update_job_status_to_running(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = str(uuid.uuid4())
+    insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_status(db, jid, "running", started_at=datetime.now())
+    assert get_job(db, jid)["status"] == "running"
+    assert get_job(db, jid)["started_at"] is not None
+
+
+def test_update_job_status_to_done_with_paths(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = str(uuid.uuid4())
+    insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_status(
+        db, jid, "done",
+        finished_at=datetime.now(),
+        result_audio_path="audio/x/jobs/y/audio.wav",
+        result_subtitle_path="audio/x/jobs/y/subtitle.srt",
+        result_params_path="audio/x/jobs/y/params.json",
+        duration_sec=2.5,
+    )
+    row = get_job(db, jid)
+    assert row["status"] == "done"
+    assert row["result_audio_path"] == "audio/x/jobs/y/audio.wav"
+    assert row["duration_sec"] == 2.5
+    assert row["finished_at"] is not None
+
+
+def test_update_job_status_to_failed_with_error(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = str(uuid.uuid4())
+    insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_status(db, jid, "failed", finished_at=datetime.now(),
+                      error="synthesis crashed")
+    row = get_job(db, jid)
+    assert row["status"] == "failed"
+    assert row["error"] == "synthesis crashed"
+
+
+def test_update_job_progress(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = str(uuid.uuid4())
+    insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_progress(db, jid, 0.5)
+    assert get_job(db, jid)["progress"] == 0.5
+    update_job_progress(db, jid, 0.9)
+    assert get_job(db, jid)["progress"] == 0.9
+
+
+def test_list_jobs_filter_by_status(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    for jid in ids:
+        insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_status(db, ids[0], "done", result_audio_path="a", result_subtitle_path="b",
+                      result_params_path="c", duration_sec=1.0)
+    update_job_status(db, ids[1], "failed", error="e")
+
+    done = list_jobs(db, statuses=["done"])
+    assert len(done) == 1
+    assert done[0]["id"] == ids[0]
+
+    failed = list_jobs(db, statuses=["failed"])
+    assert len(failed) == 1
+    assert failed[0]["id"] == ids[1]
+
+    pending = list_jobs(db, statuses=["pending"])
+    assert len(pending) == 1
+    assert pending[0]["id"] == ids[2]
+
+
+def test_list_jobs_no_status_filter_returns_all(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    for _ in range(3):
+        insert_job(db, id=str(uuid.uuid4()), card_id=cid,
+                   params=_sample_params(), text="x")
+    assert len(list_jobs(db)) == 3
+
+
+def test_list_jobs_limit(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    for _ in range(5):
+        insert_job(db, id=str(uuid.uuid4()), card_id=cid,
+                   params=_sample_params(), text="x")
+    assert len(list_jobs(db, limit=3)) == 3
+
+
+def test_delete_job(db: Path):
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = insert_job(db, id=str(uuid.uuid4()), card_id=cid,
+                     params=_sample_params(), text="x")
+    delete_job(db, jid)
+    assert get_job(db, jid) is None
+
+
+def test_cleanup_stale_running_jobs(db: Path):
+    """上次崩溃留下的 'running' 状态应被清理（标记为 failed）。"""
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    jid = str(uuid.uuid4())
+    insert_job(db, id=jid, card_id=cid, params=_sample_params(), text="x")
+    update_job_status(db, jid, "running", started_at=datetime.now())
+
+    n = cleanup_stale_running_jobs(db)
+    assert n == 1
+    row = get_job(db, jid)
+    assert row["status"] == "failed"
+    # error 字段是中文（"进程崩溃，任务丢失"），用中文匹配
+    assert "崩溃" in row["error"] or "丢失" in row["error"]
