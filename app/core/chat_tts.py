@@ -101,11 +101,14 @@ def draw_one_from_params(
     speaker: str | None = None,
     refiner_text: str | None = None,
     repetition_penalty: float = 1.05,
-    speed: str = "[speed_5]",
+    speed: int = 5,
     skip_refine_text: bool = False,
     max_new_token: int = 2048,
     spk_smp: str | None = None,
     txt_smp: str | None = None,
+    oral: int = 0,
+    laugh: int = 0,
+    break_: int = 0,
 ) -> TtsParams:
     """生成：seed/speaker 为 None 时随机，其余使用传入值。
 
@@ -140,6 +143,9 @@ def draw_one_from_params(
         max_new_token=max_new_token,
         spk_smp=spk_smp,
         txt_smp=txt_smp,
+        oral=oral,
+        laugh=laugh,
+        break_=break_,
     )
 
 

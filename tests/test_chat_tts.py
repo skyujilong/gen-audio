@@ -30,11 +30,15 @@ def test_draw_one_returns_valid_params(monkeypatch):
     assert params.speaker == "BASE64SPEAKER"
     assert params.refiner_text is None
     assert params.repetition_penalty == 1.05
-    assert params.speed == "[speed_5]"
+    assert params.speed == 5
     assert params.skip_refine_text is False
     assert params.max_new_token == 2048
     assert params.spk_smp is None
     assert params.txt_smp is None
+    # Phase 1.2: 新增 3 个整数字段
+    assert params.oral == 0
+    assert params.laugh == 0
+    assert params.break_ == 0
 
 
 def test_synthesize_to_wav_bytes_returns_wav_bytes(monkeypatch):
@@ -138,14 +142,14 @@ def test_draw_one_from_params_new_fields(monkeypatch):
         top_k=10,
         speaker="MYSPK",
         repetition_penalty=1.5,
-        speed="[speed_3]",
+        speed=3,
         skip_refine_text=True,
         max_new_token=1024,
         spk_smp="REF_AUDIO_B64",
         txt_smp="参考文本",
     )
     assert params.repetition_penalty == 1.5
-    assert params.speed == "[speed_3]"
+    assert params.speed == 3
     assert params.skip_refine_text is True
     assert params.max_new_token == 1024
     assert params.spk_smp == "REF_AUDIO_B64"
@@ -156,8 +160,12 @@ def test_tts_params_new_fields_defaults():
     """TtsParams 新字段有正确默认值。"""
     params = TtsParams(seed=1, speaker="x")
     assert params.repetition_penalty == 1.05
-    assert params.speed == "[speed_5]"
+    assert params.speed == 5
     assert params.skip_refine_text is False
     assert params.max_new_token == 2048
     assert params.spk_smp is None
     assert params.txt_smp is None
+    # Phase 1.2: oral/laugh/break_ 默认 0
+    assert params.oral == 0
+    assert params.laugh == 0
+    assert params.break_ == 0

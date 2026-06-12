@@ -98,7 +98,7 @@ def test_draw_with_custom_params(tmp_path, monkeypatch):
             speaker=kw.get("speaker") or "x",
             refiner_text=kw.get("refiner_text"),
             repetition_penalty=kw.get("repetition_penalty", 1.05),
-            speed=kw.get("speed", "[speed_5]"),
+            speed=kw.get("speed", 5),
             skip_refine_text=kw.get("skip_refine_text", False),
             max_new_token=kw.get("max_new_token", 2048),
             spk_smp=kw.get("spk_smp"),
@@ -162,7 +162,7 @@ def test_draw_with_new_params(tmp_path, monkeypatch):
     client = TestClient(app)
     res = client.post("/api/draw", json={
         "repetition_penalty": 1.5,
-        "speed": "[speed_3]",
+        "speed": 3,
         "skip_refine_text": True,
         "max_new_token": 1024,
         "spk_smp": "REF_AUDIO",
@@ -170,7 +170,7 @@ def test_draw_with_new_params(tmp_path, monkeypatch):
     })
     assert res.status_code == 200
     assert captured["repetition_penalty"] == 1.5
-    assert captured["speed"] == "[speed_3]"
+    assert captured["speed"] == 3
     assert captured["skip_refine_text"] is True
     assert captured["max_new_token"] == 1024
     assert captured["spk_smp"] == "REF_AUDIO"
@@ -178,7 +178,7 @@ def test_draw_with_new_params(tmp_path, monkeypatch):
 
     body = res.json()
     assert body["params"]["repetition_penalty"] == 1.5
-    assert body["params"]["speed"] == "[speed_3]"
+    assert body["params"]["speed"] == 3
     assert body["params"]["skip_refine_text"] is True
     assert body["params"]["max_new_token"] == 1024
 

@@ -4,10 +4,12 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # === 参数 ===
@@ -23,11 +25,14 @@ class TtsParams(BaseModel):
         speaker: ChatTTS speaker embedding（base64 字符串）。
         refiner_text: 风格 prompt（可选），如 [oral_2][laugh_1]。
         repetition_penalty: 重复惩罚，>1 抑制重复。
-        speed: 语速控制 token，默认 [speed_5]。
+        speed: 语速控制（整数 0–10），后端拼成 `[speed_X]` 给 ChatTTS。
         skip_refine_text: 跳过文本精炼，可加速推理。
         max_new_token: 最大生成 token 数。
         spk_smp: 参考音频 speaker（声音克隆），base64 字符串。
         txt_smp: 参考音频对应文本。
+        oral: 口语化程度（0–9，对应 refine prompt 中的 [oral_X]）。
+        laugh: 笑声强度（0–9，对应 refine prompt 中的 [laugh_X]）。
+        break_: 停顿强度（0–9，对应 refine prompt 中的 [break_X]）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -39,11 +44,28 @@ class TtsParams(BaseModel):
     speaker: str
     refiner_text: str | None = None
     repetition_penalty: float = 1.05
-    speed: str = "[speed_5]"
+    speed: int = 5
     skip_refine_text: bool = False
     max_new_token: int = 2048
     spk_smp: str | None = None
     txt_smp: str | None = None
+    # Phase 1.2: 新增 3 个整数字段，refine prompt 用
+    oral: int = 0
+    laugh: int = 0
+    break_: int = 0
+
+    @field_validator("speed", mode="before")
+    @classmethod
+    def _coerce_speed(cls, v: Any) -> Any:
+        """兼容老数据：老 speed 字段是形如 "[speed_5]" 的字符串，自动提数字。
+
+        新数据传整数；老数据传字符串也能 work。失败原样上抛由 Pydantic 报错。
+        """
+        if isinstance(v, str):
+            m = re.search(r"\[speed_(\d+)\]", v)
+            if m:
+                return int(m.group(1))
+        return v
 
 
 # === 常量 ===
@@ -64,11 +86,24 @@ class DrawRequest(BaseModel):
     refiner_text: str | None = None
     demo_text: str = DEFAULT_DEMO_TEXT  # 试听文本
     repetition_penalty: float = 1.05
-    speed: str = "[speed_5]"
+    speed: int = 5
     skip_refine_text: bool = False
     max_new_token: int = 2048
     spk_smp: str | None = None
     txt_smp: str | None = None
+    oral: int = 0
+    laugh: int = 0
+    break_: int = 0
+
+    @field_validator("speed", mode="before")
+    @classmethod
+    def _coerce_speed(cls, v: Any) -> Any:
+        """同 TtsParams.speed：兼容老字符串。"""
+        if isinstance(v, str):
+            m = re.search(r"\[speed_(\d+)\]", v)
+            if m:
+                return int(m.group(1))
+        return v
 
 
 class DrawnCard(BaseModel):
@@ -171,3 +206,48 @@ class Job(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+# === 音色库（Phase 1.3） ===
+
+class SpeakerBase(BaseModel):
+    """音色库共享字段。"""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    tensor_base64: str
+    tags: list[str] = []
+    is_favorited: bool = False
+
+
+class SpeakerCreate(SpeakerBase):
+    """创建音色请求。`name` + `tensor_base64` 必填。"""
+    pass
+
+
+class SpeakerUpdate(BaseModel):
+    """更新音色请求（改名 / 改 tags / 切收藏），字段均可选。"""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    tags: list[str] | None = None
+    is_favorited: bool | None = None
+
+
+class SpeakerOut(SpeakerBase):
+    """音色详情响应（含 id / 时间戳）。"""
+    id: int
+    created_at: str
+    updated_at: str
+
+
+class SpeakerListItem(BaseModel):
+    """音色库列表项（**不**带 tensor，节省带宽）。"""
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    name: str
+    tags: list[str] = []
+    is_favorited: bool = False
+    created_at: str
+    updated_at: str

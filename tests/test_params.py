@@ -14,6 +14,11 @@ from app.core.params import (
     HealthResponse,
     JobStatus,
     Job,
+    SpeakerBase,
+    SpeakerCreate,
+    SpeakerUpdate,
+    SpeakerOut,
+    SpeakerListItem,
 )
 
 
@@ -30,6 +35,53 @@ def test_tts_params_defaults():
 def test_tts_params_rejects_missing_seed():
     with pytest.raises(ValidationError):
         TtsParams(speaker="abc")  # type: ignore[call-arg]
+
+
+def test_tts_params_oral_laugh_break_defaults():
+    """oral/laugh/break_ 默认值应为 int 0。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.oral == 0
+    assert p.laugh == 0
+    assert p.break_ == 0
+
+
+def test_tts_params_oral_laugh_break_range():
+    """oral/laugh/break_ 应支持 0-9 范围。"""
+    p = TtsParams(seed=1, speaker="x", oral=3, laugh=2, break_=7)
+    assert p.oral == 3
+    assert p.laugh == 2
+    assert p.break_ == 7
+
+
+def test_tts_params_speed_default_is_int_5():
+    """speed 默认应为整数 5（不再默认 [speed_5] 字符串）。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.speed == 5
+    assert isinstance(p.speed, int)
+
+
+def test_tts_params_speed_accepts_int():
+    p = TtsParams(seed=1, speaker="x", speed=3)
+    assert p.speed == 3
+
+
+def test_tts_params_speed_compat_old_string_format():
+    """老数据形如 '[speed_5]' 的 speed 字符串，validator 应自动转 int 5。"""
+    p = TtsParams(seed=1, speaker="x", speed="[speed_5]")  # type: ignore[arg-type]
+    assert p.speed == 5
+    p2 = TtsParams(seed=1, speaker="x", speed="[speed_3]")  # type: ignore[arg-type]
+    assert p2.speed == 3
+    p3 = TtsParams(seed=1, speaker="x", speed="[speed_9]")  # type: ignore[arg-type]
+    assert p3.speed == 9
+
+
+def test_draw_request_new_fields_defaults():
+    """DrawRequest 也要有新字段，默认值与 TtsParams 一致。"""
+    req = DrawRequest()
+    assert req.oral == 0
+    assert req.laugh == 0
+    assert req.break_ == 0
+    assert req.speed == 5
 
 
 def test_draw_request_refiner_optional():
@@ -123,3 +175,73 @@ def test_job_requires_params():
     )
     assert job.id == "uuid-1"
     assert job.status == JobStatus.PENDING
+
+
+# === Phase 1.3: Speaker Pydantic 模型 ===
+
+def test_speaker_create_requires_name_and_tensor():
+    """SpeakerCreate 必须有 name + tensor_base64。"""
+    with pytest.raises(ValidationError):
+        SpeakerCreate()  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        SpeakerCreate(name="x")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        SpeakerCreate(tensor_base64="abc")  # type: ignore[call-arg]
+
+
+def test_speaker_create_valid():
+    s = SpeakerCreate(name="男声A", tensor_base64="QkFTRTY0", tags=["成熟", "磁性"])
+    assert s.name == "男声A"
+    assert s.tensor_base64 == "QkFTRTY0"
+    assert s.tags == ["成熟", "磁性"]
+    assert s.is_favorited is False  # 默认 False
+
+
+def test_speaker_update_partial():
+    u1 = SpeakerUpdate(name="新名字")
+    assert u1.name == "新名字"
+    assert u1.is_favorited is None
+    assert u1.tags is None
+
+    u2 = SpeakerUpdate(is_favorited=True)
+    assert u2.is_favorited is True
+
+    u3 = SpeakerUpdate(tags=["新标签"])
+    assert u3.tags == ["新标签"]
+
+
+def test_speaker_out_full_fields():
+    """SpeakerOut 包含所有字段（id/created_at/updated_at）。"""
+    s = SpeakerOut(
+        id=1,
+        name="女声B",
+        tensor_base64="X",
+        tags=["温柔"],
+        is_favorited=True,
+        created_at="2026-06-11T00:00:00",
+        updated_at="2026-06-11T00:00:00",
+    )
+    assert s.id == 1
+    assert s.is_favorited is True
+
+
+def test_speaker_list_item_no_tensor():
+    """列表项不带 tensor（节省带宽）。"""
+    s = SpeakerListItem(
+        id=1,
+        name="x",
+        tags=[],
+        is_favorited=False,
+        created_at="2026-06-11T00:00:00",
+        updated_at="2026-06-11T00:00:00",
+    )
+    assert s.id == 1
+
+
+def test_speaker_base_inherits_fields():
+    """SpeakerBase 共享 name/tensor_base64/tags 字段（被 Create/Out 继承）。"""
+    s = SpeakerBase(name="x", tensor_base64="abc")
+    assert s.name == "x"
+    assert s.tensor_base64 == "abc"
+    assert s.tags == []  # 默认空列表
+    assert s.is_favorited is False

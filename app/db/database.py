@@ -1,8 +1,11 @@
 """SQLite 连接管理与 schema 初始化。
 
-- 启动时调一次 `init_schema(db_path)` 建表 + 建索引。
+- 启动时调一次 `init_schema(db_path)` → 实际走 `migrations.migrate()` 跑 v0→v1→v2 幂等升级。
 - 业务代码用 `get_connection(db_path)` 取连接（context manager，自动 commit/rollback）。
 - 启用外键（`PRAGMA foreign_keys = ON`），让 `ON DELETE CASCADE` 真正生效。
+
+> Phase 1.5：`init_schema` 改为 `migrate` 的薄包装，schema 升级路径统一在
+> `app/core/migrations.py` 里维护。
 """
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-
+# 兼容老测试 / 老调用方：`SCHEMA_SQL` 仍导出，但实际不再被 init_schema 使用。
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,11 +51,16 @@ CREATE INDEX IF NOT EXISTS idx_jobs_card_id ON synthesis_jobs(card_id);
 
 
 def init_schema(db_path: Path) -> None:
-    """初始化数据库 schema（建表 + 建索引）。可重复调用。"""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.executescript(SCHEMA_SQL)
-        conn.commit()
+    """初始化 / 升级数据库 schema 到当前最新版本（v2）。
+
+    内部走 `app.core.migrations.migrate`，幂等：
+    - 全新空库：建 v0 baseline → 升 v1（speakers）→ 升 v2（cards.speaker_id）。
+    - 老库（v0）：同上从 v0 起步升级。
+    - 已是 v2：no-op。
+    """
+    # 延迟导入避免循环依赖（migrations 依赖本文件的 get_connection）
+    from ..core.migrations import migrate
+    migrate(db_path)
 
 
 @contextmanager
