@@ -257,3 +257,214 @@ def test_e2e_full_pipeline_draw_then_synthesize_poll(tmp_path, monkeypatch):
         # params.speaker_id 在 job 落库后被 resolve 成字符串
         assert final["params"]["speaker_id"] == sid
         assert final["params"]["speaker"] == _sample_base64()
+
+
+# === Phase 6.3：synthesize 页端到端（选卡 → 改 oral=5 → 批量 3 行 → 全 done） ===
+
+def test_e2e_synthesize_page_flow_select_card_override_oral_batch(tmp_path, monkeypatch):
+    """Phase 6.3：模拟 synthesize 页主流程。
+
+    1. 建一个 speaker 入库
+    2. 用库内 speaker 抽卡，得到 card_id
+    3. 模拟前端：拿 card 详情 → 用列表 API 找到这张卡
+    4. 模拟前端：param-panel 改 oral=5
+    5. 模拟前端：3 行任务批量提交（/api/synthesize/batch）
+    6. 轮询所有 job 直到都 done，验证：
+       - 每个 job 的 params.oral 都是 5（用户改写生效）
+       - params.speaker_id 来自 card 自带（沿用卡内）
+    """
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "DB_PATH", tmp_path / "data" / "gen-audio.db")
+    monkeypatch.setattr(main_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(main_mod, "SPEAKERS_DIR", tmp_path / "data" / "speakers")
+    client, _ = _setup(tmp_path)
+
+    # 1) 建 speaker
+    sid = client.post("/api/speakers", json={
+        "name": "phase6",
+        "tensor_base64": _sample_base64(),
+    }).json()["id"]
+
+    # 2) mock 抽卡推理
+    import app.api.draw as draw_mod
+    monkeypatch.setattr(
+        draw_mod, "draw_one_from_params",
+        lambda **kw: TtsParams(seed=42, speaker=_sample_base64(), oral=2, laugh=1, break_=1),
+    )
+    monkeypatch.setattr(
+        draw_mod, "synthesize_to_wav_bytes",
+        lambda params, text, on_progress=None: (b"DRAW", [(0.0, 1.0)]),
+    )
+
+    # 3) 抽卡（带 speaker_id）
+    res = client.post("/api/draw", json={"speaker_id": sid, "demo_text": "原卡文本"})
+    assert res.status_code == 200
+    card_id = res.json()["card_id"]
+    # DB.speaker_id 已落
+    from app.db.queries import get_card
+    assert get_card(config.DB_PATH, card_id)["speaker_id"] == sid
+
+    # 4) 模拟前端：列卡找到这张（与 synthesize.js renderCardPicker 等价）
+    listing = client.get("/api/cards").json()
+    this_card = next(c for c in listing if c["id"] == card_id)
+    assert this_card["speaker_id"] == sid
+    # 拉详情拿到 params（与 synthesize.js selectCard 等价）
+    detail = client.get(f"/api/cards/{card_id}").json()
+    assert detail["params"]["oral"] == 2
+    assert detail["params"]["seed"] == 42
+    assert detail["speaker_id"] == sid
+
+    # 5) 模拟前端：param-panel setParams + 改 oral=5（用户改写）
+    submission_params = dict(detail["params"])
+    submission_params["oral"] = 5  # 改写
+    submission_params["laugh"] = 3  # 顺便改
+    # 沿用卡内音色 → 把 speaker_id 一起带（synthesize.js _buildSubmitParams 行为）
+    submission_params["speaker_id"] = detail["speaker_id"]
+    submission_params.pop("speaker", None)
+    # TtsParams.speaker 是必填 str 字段；用 speaker_id 时前端要塞空串占位
+    submission_params["speaker"] = ""
+
+    # 6) mock worker 合成（确保 db 跟 tests 用的同一个）
+    from app.core import queue as queue_mod_inner
+    async def fake_synthesize_with_progress(
+        card_id, text, params, on_progress=None, job_id=None,
+    ):
+        from app.storage.files import write_synthesis_files
+        if on_progress:
+            on_progress(0.5)
+        paths = write_synthesis_files(
+            data_root=config.DATA_ROOT,
+            card_id=card_id,
+            job_id=job_id,
+            audio_bytes=b"JOB_WAV",
+            srt=f"00:00:00,000 --> 00:00:01,000\n{text}",
+            params=params,
+        )
+        if on_progress:
+            on_progress(1.0)
+        return paths["audio_path"], paths["subtitle_path"], paths["params_path"]
+    monkeypatch.setattr(queue_mod_inner, "synthesize_with_progress", fake_synthesize_with_progress)
+
+    # 7) 批量提交 3 行（与 synthesize.js submitAllBtn 等价）
+    with TestClient(app) as poll_client:
+        rows = [
+            {"rowEl": None, "text": f"任务行 #{i} 内容"} for i in range(1, 4)
+        ]
+        batch_res = poll_client.post("/api/synthesize/batch", json={
+            "items": [
+                {"card_id": card_id, "params": submission_params, "text": r["text"]}
+                for r in rows
+            ],
+        })
+        assert batch_res.status_code == 200, batch_res.text
+        jobs = batch_res.json()
+        assert len(jobs) == 3
+        job_ids = [j["id"] for j in jobs]
+        # 落库的 params 应当带 oral=5 + speaker_id
+        for j in jobs:
+            assert j["params"]["oral"] == 5
+            assert j["params"]["laugh"] == 3
+            assert j["params"]["speaker_id"] == sid
+            assert j["card_id"] == card_id
+
+        # 8) 轮询全部 done（与 synthesize.js startPolling(refreshJobs) 等价）
+        deadline = time.time() + 10.0
+        seen_done = set()
+        while time.time() < deadline and len(seen_done) < 3:
+            r = poll_client.get("/api/jobs?limit=100")
+            assert r.status_code == 200
+            for j in r.json():
+                if j["id"] in job_ids and j["status"] == "done":
+                    seen_done.add(j["id"])
+            if len(seen_done) < 3:
+                time.sleep(0.05)
+        assert len(seen_done) == 3, f"only {len(seen_done)}/3 jobs done"
+
+        # 9) 每个 done job 都能拿到 audio + subtitle
+        for jid in job_ids:
+            audio = poll_client.get(f"/api/jobs/{jid}/audio")
+            assert audio.status_code == 200
+            assert audio.content == b"JOB_WAV"
+            srt = poll_client.get(f"/api/jobs/{jid}/subtitle")
+            assert srt.status_code == 200
+            assert "任务行" in srt.text
+            params_json = poll_client.get(f"/api/jobs/{jid}/params.json")
+            assert params_json.status_code == 200
+            # params.json 反序列化后仍能看到 oral=5（持久化生效）
+            p = params_json.json()
+            assert p["oral"] == 5
+            assert p["laugh"] == 3
+
+
+def test_e2e_synthesize_page_speaker_override(tmp_path, monkeypatch):
+    """Phase 6.3 增强：用户在 synthesize 页改了音色（点"加载"选另一个库内音色）。
+
+    验证：提交时用的是新音色的 speaker_id，不是 card 自带的。
+    """
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "DB_PATH", tmp_path / "data" / "gen-audio.db")
+    monkeypatch.setattr(main_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(main_mod, "SPEAKERS_DIR", tmp_path / "data" / "speakers")
+    client, _ = _setup(tmp_path)
+
+    # 建 2 个 speaker：A 是卡内音色，B 是用户改用的
+    sid_a = client.post("/api/speakers", json={
+        "name": "voice-A",
+        "tensor_base64": _sample_base64(),
+    }).json()["id"]
+    sid_b = client.post("/api/speakers", json={
+        "name": "voice-B",
+        "tensor_base64": _sample_base64(),
+    }).json()["id"]
+    assert sid_a != sid_b
+
+    # 抽卡带 sid_a
+    import app.api.draw as draw_mod
+    monkeypatch.setattr(
+        draw_mod, "draw_one_from_params",
+        lambda **kw: TtsParams(seed=1, speaker=_sample_base64()),
+    )
+    monkeypatch.setattr(
+        draw_mod, "synthesize_to_wav_bytes",
+        lambda params, text, on_progress=None: (b"x", [(0.0, 1.0)]),
+    )
+    cid = client.post("/api/draw", json={"speaker_id": sid_a}).json()["card_id"]
+
+    detail = client.get(f"/api/cards/{cid}").json()
+    # 模拟前端：用户点"加载"选了 voice-B → state.currentSpeaker.speaker_id = sid_b
+    user_override_speaker = {
+        "speaker_id": sid_b,
+        "name": "voice-B",
+        "tensor_base64": _sample_base64(),
+    }
+    # synthesize.js _buildSubmitParams 行为：
+    #   currentSpeaker 优先于 card.speaker_id
+    submission = dict(detail["params"])
+    if user_override_speaker["speaker_id"] is not None:
+        submission["speaker_id"] = user_override_speaker["speaker_id"]
+        submission.pop("speaker", None)
+    # TtsParams.speaker 必填：传空串占位
+    submission["speaker"] = ""
+
+    # mock worker
+    from app.core import queue as queue_mod_inner
+    async def fake_synth(card_id, text, params, on_progress=None, job_id=None):
+        from app.storage.files import write_synthesis_files
+        if on_progress: on_progress(1.0)
+        paths = write_synthesis_files(
+            data_root=config.DATA_ROOT, card_id=card_id, job_id=job_id,
+            audio_bytes=b"JOB", srt="00:00:00,000 --> 00:00:01,000\nx",
+            params=params,
+        )
+        return paths["audio_path"], paths["subtitle_path"], paths["params_path"]
+    monkeypatch.setattr(queue_mod_inner, "synthesize_with_progress", fake_synth)
+
+    with TestClient(app) as poll_client:
+        res = poll_client.post("/api/synthesize", json={
+            "card_id": cid, "params": submission, "text": "改音色",
+        })
+        assert res.status_code == 200
+        job = res.json()
+        # 关键断言：用的是 voice-B（sid_b），不是 voice-A（sid_a）
+        assert job["params"]["speaker_id"] == sid_b
+        assert job["params"]["speaker_id"] != sid_a

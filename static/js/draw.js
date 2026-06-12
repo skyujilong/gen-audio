@@ -65,9 +65,14 @@ function collectFormData() {
   if (state.currentSpeaker) {
     if (state.currentSpeaker.speaker_id != null) {
       p.speaker_id = state.currentSpeaker.speaker_id;
+      // 用 speaker_id 时把 speaker 字符串清空（draw.py 会按 id 重新解析）
+      delete p.speaker;
     } else if (state.currentSpeaker.tensor_base64) {
       p.speaker = state.currentSpeaker.tensor_base64;
     }
+  } else {
+    // 没选音色：清空 speaker 让 draw.py 走随机分支
+    delete p.speaker;
   }
   // 整数字段
   for (const k of ['speed', 'oral', 'laugh', 'break_', 'top_k', 'nfe', 'max_new_token']) {
