@@ -22,10 +22,15 @@ Phase 2.2-2.5 改造：
 - 抽 `_build_infer_code_params(params)` —— 拼 `InferCodeParams`，把 `speed: int` 拼成 `prompt="[speed_X]"`
 - 抽 `_build_refine_text_params(params)` —— 拼 `RefineTextParams`（refiner_text 自由文本或 3 整数互斥）
 - 拆 `_infer_audio` 为 `_refine_text` + `_synthesize_audio` 两步范式，refine 输出用 `replace_tokens` 保护
+
+Phase 6.x 诊断日志：
+- 在 refine / synthesize 关键节点加 logging：text 长度、refine 后长度、wav 形状/范围、
+  模型是否加载、是否走了「静音占位」分支等。诊断 zero-length audio 用。
 """
 from __future__ import annotations
 
 import io
+import logging
 import random
 import wave
 from typing import Any, Callable
@@ -38,6 +43,8 @@ from .enhance import run_enhance as _run_enhance  # Phase 2.6: synthesize 接入
 
 # 模块级别名：测试可通过 `monkeypatch.setattr(chat_tts, "run_enhance", fake)` 替换
 run_enhance = _run_enhance
+
+logger = logging.getLogger(__name__)
 
 
 # === 单例状态 ===
@@ -263,6 +270,9 @@ def _refine_text(params: TtsParams, text: str) -> str:
     """
     if _MODEL is None or not _MODEL.has_loaded():
         # 模型未加载 —— 跳过 refine
+        logger.warning(
+            "[chat_tts] _refine_text skipped: model not loaded (text_len=%d)", len(text),
+        )
         return text
 
     # 保护 control token
@@ -270,8 +280,14 @@ def _refine_text(params: TtsParams, text: str) -> str:
 
     refine_params = _build_refine_text_params(params)
     if refine_params is None:
+        logger.info("[chat_tts] _refine_text: no refine prompt (oral=laugh=break_=0, refiner_text empty)")
         return text  # 无可精炼
 
+    logger.info(
+        "[chat_tts] _refine_text start: text=%r prompt=%r top_P=%s top_K=%s temp=%s",
+        safe_text[:80], refine_params.prompt, refine_params.top_P,
+        refine_params.top_K, refine_params.temperature,
+    )
     refined_safe_list = _MODEL.infer(
         safe_text,
         params_refine_text=refine_params,
@@ -279,6 +295,10 @@ def _refine_text(params: TtsParams, text: str) -> str:
     )
     # `refine_text_only=True` 返回 `list[str]`，取第一个元素
     refined_safe = refined_safe_list[0] if refined_safe_list else safe_text
+    logger.info(
+        "[chat_tts] _refine_text done: in_len=%d out_len=%d result=%r",
+        len(safe_text), len(refined_safe), refined_safe[:80],
+    )
     # 恢复 control token
     return restore_tokens(refined_safe, pairs)
 
@@ -292,13 +312,23 @@ def _synthesize_audio(
         (audio_array, segments) —— audio 是 float32 单声道，segments 是 [(start_sec, end_sec), ...]。
     """
     if _MODEL is None or not _MODEL.has_loaded():
-        # 模型未加载 —— 返回静音占位
+        # 模型未加载 —— 返回静音占位（WARNING 让排障能看到）
         duration_sec = max(1.0, len(text) * 0.15)
         sample_rate = 24000
         audio = np.zeros(int(duration_sec * sample_rate), dtype=np.float32)
         segments = [(0.0, duration_sec)]
+        logger.warning(
+            "[chat_tts] ⚠️ SILENT PLACEHOLDER: model not loaded, returning %d zero-samples "
+            "(text_len=%d duration=%.2fs). Caller will get a 1s silence wav.",
+            len(audio), len(text), duration_sec,
+        )
         return audio, segments
 
+    logger.info(
+        "[chat_tts] _synthesize_audio start: text=%r speaker_len=%d speed=%d seed=%d oral=%d laugh=%d break_=%d",
+        text[:80], len(params.speaker or ""), params.speed, params.seed,
+        params.oral, params.laugh, params.break_,
+    )
     infer_params = _build_infer_code_params(params)
 
     wavs = _MODEL.infer(
@@ -321,11 +351,23 @@ def _synthesize_audio(
             offset += duration
 
     if not audio_chunks:
+        # 模型跑了但没出音频 → 静默占位（这才是真 bug，要 WARNING 排障）
         audio = np.zeros(sample_rate, dtype=np.float32)
         segments = [(0.0, 1.0)]
+        logger.warning(
+            "[chat_tts] ⚠️ SILENT PLACEHOLDER: ChatTTS returned no audio chunks (wavs=%r text=%r). "
+            "Will write 1s silence.",
+            type(wavs).__name__, text[:80],
+        )
         return audio, segments
 
-    return np.concatenate(audio_chunks), segments
+    audio = np.concatenate(audio_chunks)
+    logger.info(
+        "[chat_tts] _synthesize_audio done: shape=%s min=%.4f max=%.4f mean=%.4f std=%.4f duration=%.2fs",
+        audio.shape, float(audio.min()), float(audio.max()),
+        float(audio.mean()), float(audio.std()), len(audio) / sample_rate,
+    )
+    return audio, segments
 
 
 def _infer_audio(
@@ -382,7 +424,22 @@ def synthesize_to_wav_bytes(
     if on_progress:
         on_progress(0.0)
 
+    logger.info(
+        "[chat_tts] synthesize_to_wav_bytes start: text=%r oral=%d laugh=%d break_=%d "
+        "speed=%d seed=%d speaker_id=%s speaker_len=%d skip_refine=%s enhance=%s denoise=%s",
+        text[:60], params.oral, params.laugh, params.break_,
+        params.speed, params.seed,
+        params.speaker_id,
+        len(params.speaker or ""),
+        params.skip_refine_text, params.enhance_audio, params.denoise_audio,
+    )
     audio, segments = _infer_audio(params, text)
+    logger.info(
+        "[chat_tts] synthesize_to_wav_bytes _infer_audio done: shape=%s min=%.4f max=%.4f mean=%.4f "
+        "segments=%d",
+        audio.shape, float(audio.min()), float(audio.max()),
+        float(audio.mean()), len(segments),
+    )
 
     if on_progress:
         on_progress(0.6)  # 推理完成；增强从 0.6 → 1.0
