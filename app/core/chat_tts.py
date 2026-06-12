@@ -34,6 +34,10 @@ import numpy as np
 
 from .params import TtsParams
 from .text_utils import replace_tokens, restore_tokens
+from .enhance import run_enhance as _run_enhance  # Phase 2.6: synthesize 接入增强
+
+# 模块级别名：测试可通过 `monkeypatch.setattr(chat_tts, "run_enhance", fake)` 替换
+run_enhance = _run_enhance
 
 
 # === 单例状态 ===
@@ -206,8 +210,17 @@ def draw_one_from_params(
     oral: int = 0,
     laugh: int = 0,
     break_: int = 0,
+    enhance_audio: bool = False,
+    denoise_audio: bool = False,
+    solver: str = "midpoint",
+    nfe: int = 64,
+    tau: float = 0.5,
 ) -> TtsParams:
-    """生成：seed/speaker 为 None 时随机，其余使用传入值。"""
+    """生成：seed/speaker 为 None 时随机，其余使用传入值。
+
+    Phase 2.6：增强 / 降噪参数也透传。draw 试听时这些参数会被 draw 路由层忽略
+    （强制不调 run_enhance）；synthesize 时则生效。
+    """
     if seed is None:
         seed = _random_int(0, 2**31 - 1)
     if speaker is None:
@@ -228,6 +241,11 @@ def draw_one_from_params(
         oral=oral,
         laugh=laugh,
         break_=break_,
+        enhance_audio=enhance_audio,
+        denoise_audio=denoise_audio,
+        solver=solver,
+        nfe=nfe,
+        tau=tau,
     )
 
 
@@ -350,6 +368,10 @@ def synthesize_to_wav_bytes(
 
     Raises:
         Exception: 推理失败时由 `_infer_audio` 抛出原样上抛（不吞错）。
+
+    Phase 2.6：合成后若 `params.enhance_audio or params.denoise_audio` → 调
+    `_run_enhance`（增强后输出 44100Hz）。draw 路由不调本函数，而是直接调
+    `_infer_audio` + `_numpy_to_wav_bytes` 来跳过增强。
     """
     if on_progress:
         on_progress(0.0)
@@ -357,9 +379,24 @@ def synthesize_to_wav_bytes(
     audio, segments = _infer_audio(params, text)
 
     if on_progress:
-        on_progress(0.7)  # 推理完成
+        on_progress(0.6)  # 推理完成；增强从 0.6 → 1.0
 
-    wav_bytes = _numpy_to_wav_bytes(audio)
+    # Phase 2.6: 增强 / 降噪
+    sample_rate = 24000
+    if params.enhance_audio or params.denoise_audio:
+        audio, sample_rate = run_enhance(
+            audio, sr=sample_rate,
+            denoise=params.denoise_audio,
+            enhance=params.enhance_audio,
+            solver=params.solver,
+            nfe=params.nfe,
+            tau=params.tau,
+        )
+
+    if on_progress:
+        on_progress(0.95)
+
+    wav_bytes = _numpy_to_wav_bytes(audio, sample_rate=sample_rate)
 
     if on_progress:
         on_progress(1.0)

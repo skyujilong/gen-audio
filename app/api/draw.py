@@ -48,9 +48,12 @@ def draw(req: DrawRequest) -> DrawnCard:
 
     demo_text = req.demo_text
 
-    # 2) 合 demo
+    # 2) 合 demo（**试听强制不增强**——抽卡需快速反馈，不走 enhance 拖慢节奏）
+    # 即便前端带了 enhance/denoise 参数，draw 路由也强制关闭。
+    from ..core.params import TtsParams
+    params_试听 = params.model_copy(update={"enhance_audio": False, "denoise_audio": False})
     audio_bytes, segments = synthesize_to_wav_bytes(
-        params=params, text=demo_text,
+        params=params_试听, text=demo_text,
     )
     srt = build_srt(
         [(demo_text, segments[0][0], segments[0][1])]

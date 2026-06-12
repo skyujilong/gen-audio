@@ -245,3 +245,75 @@ def test_speaker_base_inherits_fields():
     assert s.tensor_base64 == "abc"
     assert s.tags == []  # 默认空列表
     assert s.is_favorited is False
+
+
+# === Phase 2.6.1: 增强 / 降噪字段 ===
+
+def test_tts_params_enhance_audio_default_false():
+    """enhance_audio / denoise_audio 默认 False。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.enhance_audio is False
+    assert p.denoise_audio is False
+
+
+def test_tts_params_enhance_solver_default():
+    """solver 默认 'midpoint'。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.solver == "midpoint"
+
+
+def test_tts_params_enhance_nfe_default():
+    """nfe 默认 64，范围 1-128。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.nfe == 64
+
+
+def test_tts_params_enhance_tau_default():
+    """tau 默认 0.5，范围 0-1。"""
+    p = TtsParams(seed=1, speaker="x")
+    assert p.tau == 0.5
+
+
+def test_tts_params_enhance_custom_values():
+    p = TtsParams(
+        seed=1, speaker="x",
+        enhance_audio=True, denoise_audio=True,
+        solver="rk4", nfe=32, tau=0.7,
+    )
+    assert p.enhance_audio is True
+    assert p.denoise_audio is True
+    assert p.solver == "rk4"
+    assert p.nfe == 32
+    assert p.tau == 0.7
+
+
+def test_tts_params_enhance_nfe_out_of_range():
+    """nfe 必须在 1-128 范围内。"""
+    with pytest.raises(ValidationError):
+        TtsParams(seed=1, speaker="x", nfe=0)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        TtsParams(seed=1, speaker="x", nfe=129)  # type: ignore[call-arg]
+
+
+def test_tts_params_enhance_tau_out_of_range():
+    """tau 必须在 0-1 范围内。"""
+    with pytest.raises(ValidationError):
+        TtsParams(seed=1, speaker="x", tau=-0.1)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        TtsParams(seed=1, speaker="x", tau=1.5)  # type: ignore[call-arg]
+
+
+def test_tts_params_enhance_solver_invalid():
+    """solver 必须是 midpoint / rk4 / euler 之一。"""
+    with pytest.raises(ValidationError):
+        TtsParams(seed=1, speaker="x", solver="bogus")  # type: ignore[call-arg]
+
+
+def test_draw_request_enhance_defaults():
+    """DrawRequest 也有新字段。"""
+    req = DrawRequest()
+    assert req.enhance_audio is False
+    assert req.denoise_audio is False
+    assert req.solver == "midpoint"
+    assert req.nfe == 64
+    assert req.tau == 0.5

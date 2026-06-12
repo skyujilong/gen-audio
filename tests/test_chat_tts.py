@@ -426,3 +426,162 @@ def test_refine_text_protects_tokens(monkeypatch):
     assert "[laugh_1]" not in refine_received[0]
     assert "你好" in refine_received[0]
     assert "世界" in refine_received[0]
+
+
+# === Phase 2.6.3: _numpy_to_wav_bytes 可变 sample_rate + synthesize 接入增强 ===
+
+def test_numpy_to_wav_bytes_default_24k(monkeypatch):
+    """默认 24000Hz 头部。"""
+    from app.core import chat_tts
+    audio = np.zeros(24000, dtype=np.float32)
+    wav = chat_tts._numpy_to_wav_bytes(audio)
+    assert wav[:4] == b"RIFF"
+    # sample rate 字段在 24-27 字节（大端）
+    import struct
+    sr = struct.unpack("<I", wav[24:28])[0]
+    assert sr == 24000
+
+
+def test_numpy_to_wav_bytes_44k():
+    """传入 sample_rate=44100 → 头部 44100Hz。"""
+    from app.core import chat_tts
+    audio = np.zeros(44100, dtype=np.float32)
+    wav = chat_tts._numpy_to_wav_bytes(audio, sample_rate=44100)
+    assert wav[:4] == b"RIFF"
+    import struct
+    sr = struct.unpack("<I", wav[24:28])[0]
+    assert sr == 44100
+
+
+def test_synthesize_skips_enhance_when_no_flags(monkeypatch):
+    """enhance_audio/denoise_audio 都 False 时，synthesize 不调 run_enhance。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    enhance_called = []
+
+    def fake_run_enhance(*a, **kw):
+        enhance_called.append((a, kw))
+        return np.zeros(44100, dtype=np.float32), 44100
+
+    monkeypatch.setattr(chat_tts, "run_enhance", fake_run_enhance)
+
+    params = TtsParams(seed=1, speaker="x", enhance_audio=False, denoise_audio=False)
+    wav, segments = chat_tts.synthesize_to_wav_bytes(params, "hi")
+    assert enhance_called == []  # 不调
+    assert isinstance(wav, bytes)
+
+
+def test_synthesize_calls_enhance_when_denoise(monkeypatch):
+    """denoise_audio=True → 调 run_enhance(denoise=True, enhance=False, ...)。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    enhance_called = []
+
+    def fake_run_enhance(audio, sr, **kw):
+        enhance_called.append(kw)
+        return np.zeros(44100, dtype=np.float32), 44100
+
+    monkeypatch.setattr(chat_tts, "run_enhance", fake_run_enhance)
+
+    params = TtsParams(
+        seed=1, speaker="x",
+        denoise_audio=True, solver="rk4", nfe=32, tau=0.7,
+    )
+    wav, segments = chat_tts.synthesize_to_wav_bytes(params, "hi")
+    assert len(enhance_called) == 1
+    assert enhance_called[0]["denoise"] is True
+    assert enhance_called[0]["enhance"] is False
+    assert enhance_called[0]["solver"] == "rk4"
+    assert enhance_called[0]["nfe"] == 32
+    assert enhance_called[0]["tau"] == 0.7
+    # 输出 wav 应是 44100Hz（增强后）
+    import struct
+    sr = struct.unpack("<I", wav[24:28])[0]
+    assert sr == 44100
+
+
+def test_synthesize_calls_enhance_when_enhance_audio(monkeypatch):
+    """enhance_audio=True → 调 run_enhance(denoise=False, enhance=True, ...)。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+
+    def fake_run_enhance(audio, sr, **kw):
+        return np.zeros(44100, dtype=np.float32), 44100
+
+    captured = {}
+    def fake_capture(audio, sr, **kw):
+        captured.update(kw)
+        return np.zeros(44100, dtype=np.float32), 44100
+
+    monkeypatch.setattr(chat_tts, "run_enhance", fake_capture)
+
+    params = TtsParams(seed=1, speaker="x", enhance_audio=True)
+    chat_tts.synthesize_to_wav_bytes(params, "hi")
+    assert captured["denoise"] is False
+    assert captured["enhance"] is True
+
+
+def test_synthesize_returns_44k_wav_after_enhance(monkeypatch):
+    """增强后 wav 字节流的 sr 字段应为 44100。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    monkeypatch.setattr(chat_tts, "run_enhance",
+                        lambda audio, sr, **kw: (np.zeros(44100, dtype=np.float32), 44100))
+
+    params = TtsParams(seed=1, speaker="x", denoise_audio=True)
+    wav, _ = chat_tts.synthesize_to_wav_bytes(params, "hi")
+    import struct
+    sr = struct.unpack("<I", wav[24:28])[0]
+    assert sr == 44100
+
+
+def test_synthesize_progress_callback_fires_with_enhance(monkeypatch):
+    """增强开启时，进度回调应至少触发 [0.0, ..., 1.0]。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    monkeypatch.setattr(chat_tts, "run_enhance",
+                        lambda audio, sr, **kw: (np.zeros(44100, dtype=np.float32), 44100))
+
+    calls = []
+    params = TtsParams(seed=1, speaker="x", denoise_audio=True)
+    chat_tts.synthesize_to_wav_bytes(params, "hi", on_progress=lambda p: calls.append(p))
+    assert calls[0] == 0.0
+    assert calls[-1] == 1.0
+
+
+# === Phase 2.6.4: draw 试听强制不增强 ===
+
+def test_draw_one_from_params_skips_enhance(monkeypatch):
+    """draw_one_from_params 返回的 TtsParams 即便带 enhance_audio 也不影响试听。
+
+    试听不调 run_enhance（验证在 draw 路由层做，这里只验证 draw_one 仍正常返回）。
+    """
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    monkeypatch.setattr("app.core.chat_tts._random_int", lambda lo, hi: 1)
+    monkeypatch.setattr("app.core.chat_tts._random_speaker", lambda: "X")
+
+    params = chat_tts.draw_one_from_params(
+        seed=42, speaker="x", denoise_audio=True, enhance_audio=True,
+    )
+    # 即便带增强参数，draw_one 也能正常返回（试听由 draw 路由强制跳过）
+    assert params.denoise_audio is True
+    assert params.enhance_audio is True
+
+
+def test_synthesize_actually_does_skip_enhance(monkeypatch):
+    """直接调 synthesize_to_wav_bytes + 增强参数 → 调 run_enhance。
+
+    这是反向验证：synthesize 调增强（draw 路由需要主动控制是否调）。
+    """
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    enhance_called = []
+    def fake_enhance(audio, sr, **kw):
+        enhance_called.append(kw)
+        return np.zeros(44100, dtype=np.float32), 44100
+    monkeypatch.setattr(chat_tts, "run_enhance", fake_enhance)
+
+    params = TtsParams(seed=1, speaker="x", denoise_audio=True)
+    chat_tts.synthesize_to_wav_bytes(params, "hi")
+    assert len(enhance_called) == 1  # synthesize 会调

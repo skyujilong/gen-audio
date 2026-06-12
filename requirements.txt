@@ -7,6 +7,13 @@ torchaudio>=2.0
 numpy
 requests>=2.31
 
+# Phase 2.6: 音频增强 / 降噪
+# ⚠️ 风险：resemble-enhance==0.0.1 硬 pin torch==2.1.1/torchaudio==2.1.1
+#    并依赖 deepspeed（macOS 上 pip install 常因 ABI 不匹配失败）。
+#    建议用 `pip install resemble-enhance --no-deps` + 手动装 omegaconf/pytorch-lightning/soundfile/librosa/pandas/matplotlib/deepspeed
+#    （首次运行会从 HuggingFace 拉权重，需联网；离线需预下载并指定 run_dir）。
+resemble-enhance>=0.0.1
+
 # dev / test
 pytest>=8.0
 pytest-asyncio>=0.23

@@ -53,6 +53,12 @@ class TtsParams(BaseModel):
     oral: int = 0
     laugh: int = 0
     break_: int = 0
+    # Phase 2.6.1: 增强 / 降噪字段（仅 synthesize 生效；draw 试听强制跳过）
+    enhance_audio: bool = False
+    denoise_audio: bool = False
+    solver: str = "midpoint"  # midpoint | rk4 | euler
+    nfe: int = 64              # 1-128
+    tau: float = 0.5           # 0-1
 
     @field_validator("speed", mode="before")
     @classmethod
@@ -65,6 +71,27 @@ class TtsParams(BaseModel):
             m = re.search(r"\[speed_(\d+)\]", v)
             if m:
                 return int(m.group(1))
+        return v
+
+    @field_validator("solver")
+    @classmethod
+    def _check_solver(cls, v: str) -> str:
+        if v not in ("midpoint", "rk4", "euler"):
+            raise ValueError(f"solver 必须是 midpoint / rk4 / euler 之一, got {v!r}")
+        return v
+
+    @field_validator("nfe")
+    @classmethod
+    def _check_nfe(cls, v: int) -> int:
+        if not (1 <= v <= 128):
+            raise ValueError(f"nfe 必须在 1-128 范围内, got {v}")
+        return v
+
+    @field_validator("tau")
+    @classmethod
+    def _check_tau(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"tau 必须在 0-1 范围内, got {v}")
         return v
 
 
@@ -94,6 +121,12 @@ class DrawRequest(BaseModel):
     oral: int = 0
     laugh: int = 0
     break_: int = 0
+    # Phase 2.6.1: 同 TtsParams
+    enhance_audio: bool = False
+    denoise_audio: bool = False
+    solver: str = "midpoint"
+    nfe: int = 64
+    tau: float = 0.5
 
     @field_validator("speed", mode="before")
     @classmethod
@@ -103,6 +136,27 @@ class DrawRequest(BaseModel):
             m = re.search(r"\[speed_(\d+)\]", v)
             if m:
                 return int(m.group(1))
+        return v
+
+    @field_validator("solver")
+    @classmethod
+    def _check_solver(cls, v: str) -> str:
+        if v not in ("midpoint", "rk4", "euler"):
+            raise ValueError(f"solver 必须是 midpoint / rk4 / euler 之一, got {v!r}")
+        return v
+
+    @field_validator("nfe")
+    @classmethod
+    def _check_nfe(cls, v: int) -> int:
+        if not (1 <= v <= 128):
+            raise ValueError(f"nfe 必须在 1-128 范围内, got {v}")
+        return v
+
+    @field_validator("tau")
+    @classmethod
+    def _check_tau(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"tau 必须在 0-1 范围内, got {v}")
         return v
 
 
