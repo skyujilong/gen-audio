@@ -1,4 +1,10 @@
-"""音频增强 / 降噪：resemble-enhance 的薄封装。
+"""音频增强 / 降噪：resemble-enhance（vendored）的薄封装。
+
+vendor 原因（详见 app/core/vendor/resemble_enhance/__init__.py 注释）：
+  - pip wheel 锁 cp311 + torch==2.1.1，cp312 装不上；
+  - 源码在 scipy>=1.10 / torch>=2.10 上有两处 bug，已在 vendor 包内 fix。
+依赖：vendor 包在 app.core.vendor.resemble_enhance 路径下，model 权重
+默认从 vendored 启动器复用 .venv 里的 pip 包权重（避免 1.5G 重复存储）。
 
 设计要点：
 - `load_enhancer()` 走 `@cache` 单例，首次调用下载模型权重并加载到内存；后续调用复用。
@@ -29,10 +35,11 @@ _lib_enhance: Any = None
 
 
 def _get_lib_enhance() -> Any:
-    """懒加载 resemble_enhance.enhancer.inference.enhance 函数。"""
+    """懒加载 vendored resemble_enhance.enhancer.inference.enhance 函数。"""
     global _lib_enhance
     if _lib_enhance is None:
-        from resemble_enhance.enhancer.inference import enhance
+        # vendor 包（在 app.core.vendor.resemble_enhance），含 [VENDOR-FIX] 两处
+        from app.core.vendor.resemble_enhance.enhancer.inference import enhance
         _lib_enhance = enhance
     return _lib_enhance
 
@@ -44,13 +51,13 @@ def _load_enhancer(run_dir: str | None = None, device: str = "cpu") -> Any:
     """加载 enhancer 模型，@cache 单例。
 
     Args:
-        run_dir: 模型权重目录（None → 走默认 download()）。
+        run_dir: 模型权重目录（None → 走 vendored 启动器探测）。
         device: "cpu" / "cuda" / "mps"。
 
     Returns:
         `resemble_enhance.enhancer.train.Enhancer` 实例。
     """
-    from resemble_enhance.enhancer.inference import load_enhancer as _lib_load
+    from app.core.vendor.resemble_enhance.enhancer.inference import load_enhancer as _lib_load
     return _lib_load(run_dir, device)
 
 
@@ -96,11 +103,23 @@ def run_enhance(
 
     # 调库函数（测试可 monkeypatch app.core.enhance._lib_enhance）
     lib_enhance = _get_lib_enhance()
-    out_audio = lib_enhance(
+    out = lib_enhance(
         audio, sr, device,
         nfe=nfe, solver=solver, lambd=lambd, tau=tau,
         run_dir=run_dir,
     )
+    # vendored resemble_enhance.enhancer.inference.enhance 返回 (hwav, sr) tuple
+    # （参考 vendor/inference.py:170-172 return hwav, sr）。
+    # 旧版 pip 包曾返回裸 ndarray，vendored 版本改回 tuple 行为。
+    if isinstance(out, tuple):
+        out_audio = out[0]
+    else:
+        out_audio = out
+    # vendor 返回 torch.Tensor；下游 _numpy_to_wav_bytes 期望 numpy.ndarray
+    if hasattr(out_audio, "detach") and hasattr(out_audio, "numpy"):
+        out_audio = out_audio.detach().cpu().numpy()
+    elif hasattr(out_audio, "cpu"):  # 老 torch 没 detach 的
+        out_audio = out_audio.cpu().numpy()
     return out_audio, OUTPUT_SAMPLE_RATE
 
 

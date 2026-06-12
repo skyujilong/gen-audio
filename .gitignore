@@ -23,6 +23,9 @@ venv/
 # ChatTTS 模型文件（首次加载自动下载，约 500MB+）
 asset/
 
+# resemble-enhance vendored 包的模型权重（1.5G+，走 .venv 的 pip 包或 env 变量复用）
+app/core/vendor/resemble_enhance/model_repo/
+
 # 测试 / 工具
 .pytest_cache/
 .superpowers/
