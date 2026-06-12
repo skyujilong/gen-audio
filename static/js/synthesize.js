@@ -287,6 +287,12 @@ function _buildSubmitParams() {
   // TtsParams.speaker 是必填 str 字段；用 speaker_id 时要塞空串占位（后端 _resolve_speaker_id
   // 会按 speaker_id 从库读 tensor_base64 覆盖之）
   if (p.speaker == null) p.speaker = '';
+  // TtsParams.seed 也是必填；synthesize 页 showSeed=false，panel 不渲染 seed 输入。
+  // 沿用抽卡时的 seed 保持可复现性；若卡没 seed 才 fallback 随机。
+  if (p.seed == null) {
+    const cardSeed = state.selectedCard?.params?.seed;
+    p.seed = (typeof cardSeed === 'number') ? cardSeed : Math.floor(Math.random() * 2147483647);
+  }
   return p;
 }
 
@@ -322,7 +328,12 @@ async function submitOneJob(text, rowEl) {
       text,
     });
     _bindJobRow(rowEl, job, text);
-  } catch (e) { /* */ }
+  } catch (e) {
+    // api() 已经 toast 过详细错误；这里再补一行 console 方便排障
+    console.error('submitOneJob 失败', e);
+    const cell = rowEl.querySelector('[data-role="job-result"]') || rowEl;
+    cell.innerHTML = `<p class="text-error" style="color:#c0392b;">❌ 提交失败：${e.message}</p>`;
+  }
 }
 
 
@@ -351,7 +362,10 @@ submitAllBtn.addEventListener('click', async () => {
       _bindJobRow(it.rowEl, job, it.text);
     });
     toast(`已提交 ${newJobs.length} 个任务`, 'success');
-  } catch (e) { /* */ }
+  } catch (e) {
+    console.error('submitAllBtn 失败', e);
+    toast(`批量提交失败：${e.message}`, 'error');
+  }
 });
 
 

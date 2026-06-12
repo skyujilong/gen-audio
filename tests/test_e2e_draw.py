@@ -468,3 +468,78 @@ def test_e2e_synthesize_page_speaker_override(tmp_path, monkeypatch):
         # 关键断言：用的是 voice-B（sid_b），不是 voice-A（sid_a）
         assert job["params"]["speaker_id"] == sid_b
         assert job["params"]["speaker_id"] != sid_a
+
+
+def test_e2e_synthesize_panel_no_seed_must_422_without_card_seed(tmp_path, monkeypatch):
+    """回归测试：模拟 synthesize.js 真实提交路径（panel.getParams 不含 seed）。
+
+    修复前：前端 panel.showSeed=false → getParams() 不返回 seed → POST 缺 seed → 422
+            静默 catch 吞掉 → 用户看不到任何任务。
+    修复后：synthesize.js _buildSubmitParams() 从 state.selectedCard.params.seed 兜底。
+    本测试断言**未做兜底时**请求会 422（验证后端校验确实拒了缺 seed），
+    并断言**做了兜底后**请求会 200（验证前端修复路径有效）。
+    """
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "DB_PATH", tmp_path / "data" / "gen-audio.db")
+    monkeypatch.setattr(main_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(main_mod, "SPEAKERS_DIR", tmp_path / "data" / "speakers")
+    client, _ = _setup(tmp_path)
+
+    # 抽卡得到一张有 seed=42 的卡
+    import app.api.draw as draw_mod
+    monkeypatch.setattr(
+        draw_mod, "draw_one_from_params",
+        lambda **kw: TtsParams(seed=42, speaker=_sample_base64()),
+    )
+    monkeypatch.setattr(
+        draw_mod, "synthesize_to_wav_bytes",
+        lambda params, text, on_progress=None: (b"x", [(0.0, 1.0)]),
+    )
+    cid = client.post("/api/draw", json={}).json()["card_id"]
+    detail = client.get(f"/api/cards/{cid}").json()
+    assert detail["params"]["seed"] == 42
+
+    # mock worker（避免实际跑 ChatTTS）
+    from app.core import queue as queue_mod_inner
+    async def fake_synth(card_id, text, params, on_progress=None, job_id=None):
+        from app.storage.files import write_synthesis_files
+        if on_progress: on_progress(1.0)
+        paths = write_synthesis_files(
+            data_root=config.DATA_ROOT, card_id=card_id, job_id=job_id,
+            audio_bytes=b"JOB", srt="00:00:00,000 --> 00:00:01,000\nx",
+            params=params,
+        )
+        return paths["audio_path"], paths["subtitle_path"], paths["params_path"]
+    monkeypatch.setattr(queue_mod_inner, "synthesize_with_progress", fake_synth)
+
+    with TestClient(app) as poll_client:
+        # === 场景 A：模拟真实前端 panel.getParams()，不含 seed ===
+        # 来自 detail["params"] 但 panel.showSeed=false 会过滤掉 seed 字段
+        panel_params = {k: v for k, v in detail["params"].items() if k != "seed"}
+        assert "seed" not in panel_params  # 模拟真实性
+        # 同时附 oral/laugh 改写
+        panel_params["oral"] = 5
+        panel_params["laugh"] = 3
+        # 沿用卡内音色：speaker_id 模式 + 空串占位
+        panel_params["speaker_id"] = detail.get("speaker_id")
+        panel_params["speaker"] = ""
+
+        res = poll_client.post("/api/synthesize", json={
+            "card_id": cid, "params": panel_params, "text": "测试",
+        })
+        # 关键断言：没 seed → 后端必须 422（验证 bug 的后端侧形状）
+        assert res.status_code == 422, res.text
+        assert "seed" in res.text.lower()
+
+        # === 场景 B：前端已从 card 兜底 seed 后的提交 ===
+        fixed_params = dict(panel_params)
+        fixed_params["seed"] = detail["params"]["seed"]  # _buildSubmitParams 的兜底行为
+        res2 = poll_client.post("/api/synthesize", json={
+            "card_id": cid, "params": fixed_params, "text": "测试",
+        })
+        assert res2.status_code == 200, res2.text
+        job = res2.json()
+        # 落库的 params 应当含 oral=5/laugh=3/seed=42
+        assert job["params"]["seed"] == 42
+        assert job["params"]["oral"] == 5
+        assert job["params"]["laugh"] == 3

@@ -42,10 +42,24 @@ async function api(method, path, body, isForm = false) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: '请求失败', code: 'UNKNOWN' }));
-    toast(err.detail, 'error');
-    const e = new Error(err.detail);
+    // FastAPI 校验错误时 detail 是 [{loc, msg, type}, ...] 数组，
+    // 旧版直接 toast 会出现 "[object Object]"。展平成可读文本。
+    let detail;
+    if (Array.isArray(err.detail)) {
+      detail = err.detail.map(d => {
+        const path = Array.isArray(d.loc) ? d.loc.filter(x => x !== 'body').join('.') : '';
+        return path ? `${path}: ${d.msg}` : d.msg;
+      }).join('; ');
+    } else if (typeof err.detail === 'string') {
+      detail = err.detail;
+    } else {
+      detail = `请求失败 (${res.status})`;
+    }
+    toast(detail, 'error');
+    const e = new Error(detail);
     e.code = err.code;
     e.status = res.status;
+    e.detail = err.detail;
     throw e;
   }
   if (res.status === 204) return null;
