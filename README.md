@@ -38,7 +38,7 @@
 run.bat
 ```
 
-启动脚本会自动创建 `.venv` 虚拟环境并安装依赖。浏览器打开 <http://127.0.0.1:8000>。
+启动脚本会自动创建 `.venv` 虚拟环境并安装依赖。浏览器打开 <http://127.0.0.1:9876>。
 
 ### 手动启动
 
@@ -56,7 +56,7 @@ uv pip install -r requirements-lock.txt
 # 或: pip install -r requirements-lock.txt
 
 # 4. 启动
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 9876
 ```
 
 ### 依赖说明

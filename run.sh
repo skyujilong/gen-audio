@@ -6,7 +6,7 @@ set -e
 
 echo "==================================="
 echo " gen-audio 启动中..."
-echo " 浏览器打开: http://127.0.0.1:8000"
+echo " 浏览器打开: http://127.0.0.1:9876"
 echo " 按 Ctrl+C 停止"
 echo "==================================="
 
@@ -52,4 +52,4 @@ else
 fi
 
 # 启动 uvicorn
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 9876

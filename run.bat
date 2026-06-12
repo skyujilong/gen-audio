@@ -4,7 +4,7 @@ REM 用法：双击 run.bat，或在命令行 `run`
 
 echo ===================================
 echo  gen-audio 启动中...
-echo  浏览器打开: http://127.0.0.1:8000
+echo  浏览器打开: http://127.0.0.1:9876
 echo  按 Ctrl+C 停止
 echo ===================================
 
@@ -43,5 +43,5 @@ if errorlevel 1 (
 )
 
 REM 启动 uvicorn
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 9876
 pause
