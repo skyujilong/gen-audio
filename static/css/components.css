@@ -1,0 +1,289 @@
+/* ============================================================
+ * components.css —— 共享 UI 组件样式（param-panel / speaker-picker）
+ *
+ * 设计原则：与 main.css 互补。基础元素（button/input/select）继承 main.css；
+ * 这里只放：
+ *  - 两栏布局 (panel-grid)
+ *  - param-panel 内的滑条行 / 数值框 / 范围标签
+ *  - 增强分区灰显态
+ *  - speaker-picker 弹窗 / 网格
+ *  - 通用 modal / form-section 工具类
+ *
+ * 颜色变量：跟 main.css 保持一致。
+ * ============================================================ */
+
+
+/* === CSS 变量（继承 main.css 的色调，便于一处改） === */
+
+:root {
+  --c-bg: #f5f5f7;
+  --c-bg-card: #fff;
+  --c-border: #d2d2d7;
+  --c-border-strong: #b0b0b5;
+  --c-text: #1d1d1f;
+  --c-text-muted: #6e6e73;
+  --c-accent: #0071e3;
+  --c-accent-hover: #0077ed;
+  --c-success: #34c759;
+  --c-warn: #ff9500;
+  --c-danger: #ff3b30;
+  --c-tag-bg: #e8e8ed;
+  --c-disabled-bg: #f0f0f3;
+  --c-disabled-text: #8e8e93;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+}
+
+
+/* === 两栏布局（draw 页主体） === */
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 16px;
+  margin-top: 16px;
+}
+@media (max-width: 1024px) {
+  /* 小屏：堆叠为单列，右侧出声卡下沉 */
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel-grid .col-left  { min-width: 0; }
+.panel-grid .col-right { min-width: 0; }
+
+
+/* === 表单分区 (Form Section) === */
+
+.form-section {
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.form-section > h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.form-section > h3 .hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--c-text-muted);
+  margin-left: auto;
+}
+
+
+/* === 滑条行（slider row） === */
+
+.slider-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 64px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.slider-row > label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text);
+}
+.slider-row > input[type="range"] {
+  width: 100%;
+  accent-color: var(--c-accent);
+}
+.slider-row > input[type="number"] {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-bg-card);
+  width: 100%;
+  text-align: right;
+}
+
+/* 整数滑条 (0-9 / 0-10 / 1-128) 用更窄的数值框 */
+.slider-row.integer > input[type="number"] { width: 56px; }
+
+
+/* === 灰显（不可用） === */
+
+.is-disabled,
+.is-disabled * {
+  cursor: not-allowed !important;
+}
+.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+
+/* === Param panel 增强分区 === */
+
+.param-enhance {
+  border-top: 1px dashed var(--c-border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.param-enhance > .form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.param-enhance > .form-row label {
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+.param-enhance .notice {
+  font-size: 12px;
+  color: var(--c-warn);
+  margin-bottom: 8px;
+}
+
+
+/* === Speaker 标签 === */
+
+.speaker-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--c-tag-bg);
+  color: var(--c-text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.speaker-tag.fav::before { content: '⭐'; }
+.speaker-tag.empty { color: var(--c-text-muted); font-style: italic; }
+
+
+/* === 按钮组（横排紧凑） === */
+
+.btn-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.btn-group > button {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+
+/* === 卡片网格（speaker-picker 库展示） === */
+
+.speaker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+}
+.speaker-cell {
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.speaker-cell:hover { border-color: var(--c-accent); }
+.speaker-cell.selected {
+  border-color: var(--c-accent);
+  background: rgba(0, 113, 227, 0.06);
+}
+.speaker-cell .name {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.speaker-cell .tags {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.speaker-cell .tag-chip {
+  background: var(--c-tag-bg);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+
+/* === Modal（speaker-picker 等用） === */
+
+.modal-bg {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: var(--c-bg-card);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  max-width: 720px;
+  width: 92%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.modal > header > h2 { font-size: 16px; }
+.modal > header > .close {
+  background: none; border: none; cursor: pointer;
+  font-size: 20px; color: var(--c-text-muted);
+  padding: 0 4px;
+}
+.modal > .modal-body {
+  overflow-y: auto;
+  flex: 1;
+}
+.modal > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--c-border);
+  padding-top: 12px;
+}
+
+
+/* === 工具类 === */
+
+.mt-8  { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.mb-8  { margin-bottom: 8px; }
+.mb-12 { margin-bottom: 12px; }
+
+.text-muted { color: var(--c-text-muted); }
+.text-sm    { font-size: 13px; }
+.text-xs    { font-size: 12px; }
+
+.hidden { display: none !important; }

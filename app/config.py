@@ -21,5 +21,8 @@ DATA_ROOT = Path(os.getenv("DATA_ROOT", str(PROJECT_ROOT / "data")))
 # SQLite 数据库路径：<DATA_ROOT>/gen-audio.db
 DB_PATH = DATA_ROOT / "gen-audio.db"
 
+# 音色库目录：<DATA_ROOT>/speakers（每个音色一份 .pt 文件）
+SPEAKERS_DIR = DATA_ROOT / "speakers"
+
 # 前端静态文件目录
 STATIC_DIR = PROJECT_ROOT / "static"

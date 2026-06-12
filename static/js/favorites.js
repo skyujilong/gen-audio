@@ -38,6 +38,7 @@ async function loadList() {
       <div class="row" style="margin-top: 8px;">
         <button class="secondary" data-act="fav" data-id="${c.id}">${c.is_favorited ? '☆ 取消收藏' : '⭐ 收藏'}</button>
         <a class="tag" href="/synthesize?card_id=${c.id}" style="text-decoration:none;color:inherit">🎤 用此卡合成</a>
+        <a class="tag" href="/draw?card_id=${c.id}" style="text-decoration:none;color:inherit" title="加载到抽卡页（可改参数/音色再生成）">🔊 抽卡页</a>
         <button class="danger" data-act="del" data-id="${c.id}" style="margin-left:auto">🗑 删</button>
       </div>
     `;

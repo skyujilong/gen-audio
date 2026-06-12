@@ -20,6 +20,12 @@ from app.db.queries import (
     update_job_progress,
     delete_job,
     cleanup_stale_running_jobs,
+    insert_speaker,
+    get_speaker,
+    list_speakers,
+    update_speaker,
+    delete_speaker,
+    toggle_speaker_favorite,
 )
 from app.core.params import TtsParams
 
@@ -270,3 +276,151 @@ def test_cleanup_stale_running_jobs(db: Path):
     assert row["status"] == "failed"
     # error 字段是中文（"进程崩溃，任务丢失"），用中文匹配
     assert "崩溃" in row["error"] or "丢失" in row["error"]
+
+
+# === Phase 1.6: speakers CRUD ===
+
+def test_insert_speaker_returns_id(db: Path):
+    sid = insert_speaker(db, name="男声A", tensor_base64="QkFTRTY0")
+    assert isinstance(sid, int)
+    assert sid >= 1
+
+
+def test_insert_speaker_with_tags_and_favorite(db: Path):
+    sid = insert_speaker(
+        db, name="女声B", tensor_base64="X",
+        tags=["温柔", "磁性"], is_favorited=True,
+    )
+    row = get_speaker(db, sid)
+    assert row is not None
+    assert row["name"] == "女声B"
+    assert row["tags"] == ["温柔", "磁性"]
+    assert row["is_favorited"] is True
+
+
+def test_get_speaker_returns_none_for_missing(db: Path):
+    assert get_speaker(db, 999) is None
+
+
+def test_list_speakers_empty(db: Path):
+    assert list_speakers(db) == []
+
+
+def test_list_speakers_filter_favorited(db: Path):
+    insert_speaker(db, name="a", tensor_base64="1", is_favorited=False)
+    sid_b = insert_speaker(db, name="b", tensor_base64="2", is_favorited=True)
+    fav = list_speakers(db, favorited=True)
+    assert len(fav) == 1
+    assert fav[0]["id"] == sid_b
+    all_ = list_speakers(db, favorited=False)
+    assert len(all_) == 2
+
+
+def test_list_speakers_search(db: Path):
+    insert_speaker(db, name="成熟男声", tensor_base64="1")
+    insert_speaker(db, name="活泼女声", tensor_base64="2")
+    res = list_speakers(db, search="男声")
+    assert len(res) == 1
+    assert res[0]["name"] == "成熟男声"
+
+
+def test_update_speaker_rename(db: Path):
+    sid = insert_speaker(db, name="old", tensor_base64="x")
+    update_speaker(db, sid, name="new")
+    assert get_speaker(db, sid)["name"] == "new"
+
+
+def test_update_speaker_tags(db: Path):
+    sid = insert_speaker(db, name="x", tensor_base64="x", tags=["a"])
+    update_speaker(db, sid, tags=["b", "c"])
+    assert get_speaker(db, sid)["tags"] == ["b", "c"]
+
+
+def test_update_speaker_favorite(db: Path):
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    update_speaker(db, sid, is_favorited=True)
+    assert get_speaker(db, sid)["is_favorited"] is True
+    update_speaker(db, sid, is_favorited=False)
+    assert get_speaker(db, sid)["is_favorited"] is False
+
+
+def test_update_speaker_noop_when_no_fields(db: Path):
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    update_speaker(db, sid)  # 不传任何字段
+    row = get_speaker(db, sid)
+    assert row["name"] == "x"  # 不变
+
+
+def test_delete_speaker_removes_row(db: Path):
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    delete_speaker(db, sid)
+    assert get_speaker(db, sid) is None
+
+
+def test_delete_speaker_nullifies_card_references(db: Path):
+    """删音色时，引用它的 card.speaker_id 应被置 NULL（ON DELETE SET NULL 应用层模拟）。"""
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    cid = insert_card(db, name="c", params=_sample_params(),
+                      demo_text="t", demo_audio_path=None, demo_subtitle_path=None,
+                      speaker_id=sid)
+    # 删前 card 引用 sid
+    card = get_card(db, cid)
+    assert card["speaker_id"] == sid
+
+    delete_speaker(db, sid)
+
+    # 删后 card 仍在，speaker_id = NULL
+    card_after = get_card(db, cid)
+    assert card_after is not None
+    assert card_after["speaker_id"] is None
+
+
+def test_toggle_speaker_favorite(db: Path):
+    sid = insert_speaker(db, name="x", tensor_base64="x", is_favorited=False)
+    assert toggle_speaker_favorite(db, sid) is True
+    assert toggle_speaker_favorite(db, sid) is False
+    assert toggle_speaker_favorite(db, sid) is True
+
+
+def test_toggle_speaker_favorite_missing_returns_none(db: Path):
+    assert toggle_speaker_favorite(db, 999) is None
+
+
+def test_insert_card_with_speaker_id(db: Path):
+    """insert_card 加 speaker_id 可选参数。"""
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    cid = insert_card(
+        db, name="c", params=_sample_params(),
+        demo_text="t", demo_audio_path=None, demo_subtitle_path=None,
+        speaker_id=sid,
+    )
+    card = get_card(db, cid)
+    assert card["speaker_id"] == sid
+
+
+def test_insert_card_default_speaker_id_is_null(db: Path):
+    """不传 speaker_id → 默认 NULL（向后兼容）。"""
+    cid = insert_card(
+        db, name="c", params=_sample_params(),
+        demo_text="t", demo_audio_path=None, demo_subtitle_path=None,
+    )
+    card = get_card(db, cid)
+    assert card["speaker_id"] is None
+
+
+def test_list_cards_includes_speaker_id(db: Path):
+    """list_cards 返回的 dict 应包含 speaker_id 字段。"""
+    sid = insert_speaker(db, name="x", tensor_base64="x")
+    insert_card(db, name="c1", params=_sample_params(),
+                demo_text="t", demo_audio_path=None, demo_subtitle_path=None,
+                speaker_id=sid)
+    insert_card(db, name="c2", params=_sample_params(),
+                demo_text="t", demo_audio_path=None, demo_subtitle_path=None)
+    rows = list_cards(db)
+    assert len(rows) == 2
+    for r in rows:
+        assert "speaker_id" in r
+    # c1 绑定、c2 NULL
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["c1"]["speaker_id"] == sid
+    assert by_name["c2"]["speaker_id"] is None

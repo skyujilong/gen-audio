@@ -16,9 +16,23 @@ function toast(message, type = 'info') {
   setTimeout(() => el.remove(), TOAST_DURATION_MS);
 }
 
-async function api(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body !== undefined) opts.body = JSON.stringify(body);
+/**
+ * 通用 API 调用。
+ * @param {string} method   GET / POST / PATCH / DELETE / PUT
+ * @param {string} path     e.g. '/draw' (会自动补 /api 前缀)
+ * @param {any}    body     普通对象 / FormData / null
+ * @param {boolean} [isForm] true 时 body 视为 FormData，不加 Content-Type
+ */
+async function api(method, path, body, isForm = false) {
+  const opts = { method };
+  if (body === undefined || body === null) {
+    // no body
+  } else if (isForm) {
+    opts.body = body;  // FormData, 让浏览器自己设 boundary
+  } else {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
   let res;
   try {
     res = await fetch(`/api${path}`, opts);
@@ -50,4 +64,36 @@ function startPolling(fn, intervalMs = 2000) {
   return () => { stopped = true; };
 }
 
-export { api, toast, startPolling };
+// === 音色库 wrapper（Phase 5.4） ===
+//
+// 全部走 /api/speakers 前缀的 REST 端点。
+// 详见 app/api/speakers.py。
+const speakers = {
+  list({favorited, search} = {}) {
+    const params = new URLSearchParams();
+    if (favorited !== undefined) params.set('favorited', String(favorited));
+    if (search) params.set('search', search);
+    const q = params.toString();
+    return api('GET', `/speakers${q ? '?' + q : ''}`);
+  },
+  get(id)              { return api('GET', `/speakers/${id}`); },
+  create({name, tensor_base64, tags = [], is_favorited = false}) {
+    return api('POST', '/speakers', {name, tensor_base64, tags, is_favorited});
+  },
+  /** 从上传的 .pt 文件创建；File 对象 + 必填 name。 */
+  upload(file, name, {tags = [], is_favorited = false} = {}) {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('name', name);
+    fd.append('tags', JSON.stringify(tags));
+    fd.append('is_favorited', String(is_favorited));
+    return api('POST', '/speakers/upload', fd, /* isForm */ true);
+  },
+  update(id, body)     { return api('PATCH', `/speakers/${id}`, body); },
+  delete(id)           { return api('DELETE', `/speakers/${id}`); },
+  toggleFavorite(id)   { return api('POST', `/speakers/${id}/favorite`); },
+  /** 随机音色（不写库） */
+  random()             { return api('GET', '/speakers/random'); },
+};
+
+export { api, toast, startPolling, speakers };

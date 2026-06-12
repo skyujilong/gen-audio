@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>合成 · gen-audio</title>
   <link rel="stylesheet" href="/css/main.css" />
+  <link rel="stylesheet" href="/css/components.css" />
 </head>
 <body>
   <nav class="top-nav">
@@ -12,24 +13,54 @@
     <a href="/synthesize" class="active">合成</a>
   </nav>
   <h1>🎤 批量合成</h1>
+  <p class="muted">选卡 → 选音色（可改）→ 调整参数 → 添加任务行 → 全部提交 → 等进度 → 播放。</p>
 
-  <div style="display: grid; grid-template-columns: 30% 70%; gap: 16px; margin-top: 16px;">
-    <!-- 左栏：卡选择 -->
-    <div>
-      <h2>选卡</h2>
-      <input type="text" id="search" placeholder="搜索卡名/id..." style="margin-bottom: 8px;" />
-      <div id="card-picker" style="max-height: 70vh; overflow-y: auto;"></div>
+  <div class="panel-grid">
+    <!-- 左栏：选卡 + 选音色 -->
+    <div class="col-left">
+      <!-- 选卡 -->
+      <div class="form-section">
+        <h3>
+          <span>📇 选卡</span>
+          <span class="hint" id="selected-card-hint">未选</span>
+        </h3>
+        <input type="text" id="card-search" placeholder="搜索卡名/id..." style="margin-bottom: 8px;" />
+        <div id="card-picker" style="max-height: 40vh; overflow-y: auto;"></div>
+      </div>
+
+      <!-- 选音色（可与 card 自带音色不同） -->
+      <div class="form-section">
+        <h3>
+          <span>🎤 音色（可改）</span>
+          <span class="hint" id="speaker-hint">沿用卡内音色</span>
+        </h3>
+        <div id="speaker-display" style="margin-bottom: 8px;"></div>
+        <div class="btn-group">
+          <button id="load-speaker-btn" class="secondary" type="button">📚 加载</button>
+          <button id="rand-speaker-btn" class="secondary" type="button">🎲 随机</button>
+          <button id="clear-speaker-btn" class="secondary" type="button">↩ 沿用卡内</button>
+        </div>
+      </div>
     </div>
 
-    <!-- 右栏：任务行列表 -->
-    <div>
-      <div class="row" style="margin-bottom: 12px;">
-        <button id="add-row">+ 添加一行</button>
-        <button id="submit-all" style="margin-left: auto;">🚀 全部提交</button>
-      </div>
-      <div id="rows"></div>
+    <!-- 右栏：参数面板 + 任务行 -->
+    <div class="col-right">
+      <!-- 参数面板（共享 param-panel；showSeed=false 隐藏 seed 行，mode='synthesize' 启用增强区） -->
+      <div id="param-host"></div>
 
-      <p id="queue-status" class="muted" style="margin-top: 16px;"></p>
+      <!-- 任务行 -->
+      <div class="form-section">
+        <h3>
+          <span>📝 任务行</span>
+          <span class="hint" id="queue-hint">0 行</span>
+        </h3>
+        <div class="row" style="margin-bottom: 12px;">
+          <button id="add-row" class="secondary" type="button">+ 添加一行</button>
+          <button id="submit-all" style="margin-left:auto;">🚀 全部提交</button>
+        </div>
+        <div id="rows"></div>
+        <p id="queue-status" class="text-muted text-sm" style="margin-top: 12px;"></p>
+      </div>
     </div>
   </div>
 

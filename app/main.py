@@ -17,8 +17,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import card_import, cards, draw, health, jobs, synthesize
-from .config import DB_PATH, DATA_ROOT, STATIC_DIR
+from .api import card_import, cards, draw, health, jobs, speakers, synthesize
+from .config import DB_PATH, DATA_ROOT, SPEAKERS_DIR, STATIC_DIR
 from .core import chat_tts
 from .core.exceptions import AppError
 from .core.queue import init_queue
@@ -40,10 +40,12 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动 / 关闭钩子。"""
-    # 启动：建 DB + 异步加载模型 + 启动队列
+    # 启动：建 DB + 建 speakers 目录 + 异步加载模型 + 启动队列
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     init_schema(DB_PATH)
+    SPEAKERS_DIR.mkdir(parents=True, exist_ok=True)
     log.info("数据库已就绪：%s", DB_PATH)
+    log.info("音色库目录：%s", SPEAKERS_DIR)
 
     async def _load_model_in_background() -> None:
         """后台加载 ChatTTS 模型：失败不影响应用启动。"""
@@ -88,6 +90,7 @@ app.include_router(cards.router)
 app.include_router(card_import.router)
 app.include_router(synthesize.router)
 app.include_router(jobs.router)
+app.include_router(speakers.router)
 
 
 # === 静态文件（前端） ===

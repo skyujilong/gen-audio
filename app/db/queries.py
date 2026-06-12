@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .database import get_connection
-from ..core.params import TtsParams
+from ..core.params import TtsParams, SpeakerBase, SpeakerOut, SpeakerListItem
 
 
 # === 行 → dict 转换 ===
@@ -31,6 +31,7 @@ def _row_to_card_dict(row: sqlite3.Row) -> dict[str, Any]:
         "demo_audio_path": row["demo_audio_path"],
         "demo_subtitle_path": row["demo_subtitle_path"],
         "is_favorited": bool(row["is_favorited"]),
+        "speaker_id": row["speaker_id"] if "speaker_id" in row.keys() else None,
         "created_at": _isoformat(row["created_at"]),
         "updated_at": _isoformat(row["updated_at"]),
     }
@@ -52,15 +53,20 @@ def insert_card(
     demo_text: str,
     demo_audio_path: str | None,
     demo_subtitle_path: str | None,
+    speaker_id: int | None = None,
 ) -> int:
-    """插入一张新卡，返回自增 id。"""
+    """插入一张新卡，返回自增 id。
+
+    Phase 1.6：新增可选 `speaker_id`，引用 speakers 表（FK 由应用层保证）。
+    老调用方不传 → 仍为 NULL，向后兼容。
+    """
     with get_connection(db_path) as conn:
         cur = conn.execute(
             """
-            INSERT INTO cards (name, params, demo_text, demo_audio_path, demo_subtitle_path)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO cards (name, params, demo_text, demo_audio_path, demo_subtitle_path, speaker_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (name, json.dumps(params.model_dump()), demo_text, demo_audio_path, demo_subtitle_path),
+            (name, json.dumps(params.model_dump()), demo_text, demo_audio_path, demo_subtitle_path, speaker_id),
         )
         return cur.lastrowid
 
@@ -277,3 +283,145 @@ def cleanup_stale_running_jobs(db_path: Path) -> int:
             """
         )
         return cur.rowcount
+
+
+# === speakers CRUD（Phase 1.6） ===
+
+def _row_to_speaker_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """speakers row → dict（tags 是 JSON 字符串，转 list）。"""
+    tags_raw = row["tags"]
+    if isinstance(tags_raw, str):
+        tags = json.loads(tags_raw) if tags_raw else []
+    else:
+        tags = tags_raw or []
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "tensor_base64": row["tensor_base64"],
+        "tags": tags,
+        "is_favorited": bool(row["is_favorited"]),
+        "created_at": _isoformat(row["created_at"]),
+        "updated_at": _isoformat(row["updated_at"]),
+    }
+
+
+def insert_speaker(
+    db_path: Path,
+    name: str,
+    tensor_base64: str,
+    tags: list[str] | None = None,
+    is_favorited: bool = False,
+) -> int:
+    """插入一个音色，返回自增 id。"""
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO speakers (name, tensor_base64, tags, is_favorited)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, tensor_base64, json.dumps(tags or []), 1 if is_favorited else 0),
+        )
+        return cur.lastrowid
+
+
+def get_speaker(db_path: Path, speaker_id: int) -> dict[str, Any] | None:
+    """按 id 取单个音色；找不到返回 None。"""
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM speakers WHERE id = ?", (speaker_id,)
+        ).fetchone()
+        return _row_to_speaker_dict(row) if row else None
+
+
+def list_speakers(
+    db_path: Path,
+    favorited: bool | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """列音色库，按 created_at 倒序。
+
+    Args:
+        favorited: True = 只列收藏；False/None = 全部。
+        search: 可选 name 模糊匹配（LIKE '%search%'）。
+    """
+    sql = "SELECT * FROM speakers"
+    params: list[Any] = []
+    wheres: list[str] = []
+    if favorited is True:
+        wheres.append("is_favorited = 1")
+    if search:
+        wheres.append("name LIKE ?")
+        params.append(f"%{search}%")
+    if wheres:
+        sql += " WHERE " + " AND ".join(wheres)
+    sql += " ORDER BY created_at DESC, id DESC"
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+        return [_row_to_speaker_dict(r) for r in rows]
+
+
+def update_speaker(
+    db_path: Path,
+    speaker_id: int,
+    name: str | None = None,
+    tags: list[str] | None = None,
+    is_favorited: bool | None = None,
+) -> None:
+    """更新音色 name / tags / is_favorited。任一可空。"""
+    sets: list[str] = []
+    values: list[Any] = []
+    if name is not None:
+        sets.append("name = ?")
+        values.append(name)
+    if tags is not None:
+        sets.append("tags = ?")
+        values.append(json.dumps(tags))
+    if is_favorited is not None:
+        sets.append("is_favorited = ?")
+        values.append(1 if is_favorited else 0)
+
+    if not sets:
+        return  # no-op
+
+    sets.append("updated_at = CURRENT_TIMESTAMP")
+    values.append(speaker_id)
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            f"UPDATE speakers SET {', '.join(sets)} WHERE id = ?",
+            values,
+        )
+
+
+def delete_speaker(db_path: Path, speaker_id: int) -> int:
+    """删音色；同步把引用它的 cards.speaker_id 置 NULL（应用层模拟 ON DELETE SET NULL）。
+
+    Returns:
+        影响的行数（1 = 真删了 0 行也算成功）。
+    """
+    with get_connection(db_path) as conn:
+        # 先把引用置 NULL
+        conn.execute(
+            "UPDATE cards SET speaker_id = NULL, updated_at = CURRENT_TIMESTAMP "
+            "WHERE speaker_id = ?",
+            (speaker_id,),
+        )
+        cur = conn.execute("DELETE FROM speakers WHERE id = ?", (speaker_id,))
+        return cur.rowcount
+
+
+def toggle_speaker_favorite(db_path: Path, speaker_id: int) -> bool | None:
+    """切收藏状态。返回新的 is_favorited；找不到返回 None。"""
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT is_favorited FROM speakers WHERE id = ?", (speaker_id,)
+        ).fetchone()
+        if not row:
+            return None
+        new_val = 0 if row["is_favorited"] else 1
+        conn.execute(
+            "UPDATE speakers SET is_favorited = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (new_val, speaker_id),
+        )
+        return bool(new_val)
