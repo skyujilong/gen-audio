@@ -1,9 +1,11 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.7
-ChatTTS>=0.1
+ChatTTS>=0.2.5
 torch>=2.0
+torchaudio>=2.0
 numpy
+requests>=2.31
 
 # dev / test
 pytest>=8.0

@@ -11,21 +11,35 @@ echo ===================================
 REM 检查 Python
 where python >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] 未找到 python，请先安装 Python 3.11+
+    echo [ERROR] 未找到 python，请先安装 Python 3.12+
     pause
     exit /b 1
 )
 
-REM 检查依赖
-python -c "import fastapi" >nul 2>nul
-if errorlevel 1 (
-    echo [INFO] 首次启动，安装依赖...
-    pip install -r requirements.txt
+REM 创建虚拟环境（如果不存在）
+if not exist ".venv" (
+    echo [INFO] 创建 Python 虚拟环境...
+    python -m venv .venv
     if errorlevel 1 (
-        echo [ERROR] 依赖安装失败
+        echo [ERROR] 虚拟环境创建失败
         pause
         exit /b 1
     )
+)
+
+REM 激活虚拟环境
+call .venv\Scripts\activate.bat
+
+REM 安装依赖
+if exist "requirements-lock.txt" (
+    pip install -r requirements-lock.txt
+) else (
+    pip install -r requirements.txt
+)
+if errorlevel 1 (
+    echo [ERROR] 依赖安装失败
+    pause
+    exit /b 1
 )
 
 REM 启动 uvicorn

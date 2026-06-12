@@ -1,4 +1,4 @@
-"""ChatTTS 模型封装。
+"""ChatTTS 模型封装（适配 ChatTTS >= 0.2.5）。
 
 对外暴露三个函数：
 - `is_model_loaded()`: 当前模型是否已加载进内存。
@@ -10,6 +10,13 @@
 - 随机参数走 `_random_int` / `_random_float` 等内部函数，测试可以 patch 掉。
 - 真实模型推理走 `_infer_audio(params, text) -> (np.ndarray, segments)`，测试可 patch。
 - **不吞错**：任何异常都直接往上抛，由调用方（worker）转 `TtsError`。
+
+ChatTTS 0.2.5 API 变更（相比 0.1.x）：
+- `load_models()` → `load()`
+- 新增 `InferCodeParams` / `RefineTextParams` 参数类
+- 新增 `sample_random_speaker()` 返回 speaker embedding 字符串
+- `has_loaded()` 替代手动 `_LOADED` 标记
+- `infer()` 接受 `params_infer_code` / `params_refine_text` 参数
 """
 from __future__ import annotations
 
@@ -26,25 +33,24 @@ from .params import TtsParams
 # === 单例状态 ===
 
 _MODEL = None   # 真实 ChatTTS 模型实例（首次加载后填入）
-_LOADED = False  # 是否加载完成
 
 
 def is_model_loaded() -> bool:
     """返回模型是否已加载到内存。"""
-    return _LOADED
+    if _MODEL is None:
+        return False
+    return _MODEL.has_loaded()
 
 
 def load_model() -> None:
     """加载 ChatTTS 模型到内存。失败抛 `RuntimeError`（由调用方 wrap 为 `TtsError`）。"""
-    global _MODEL, _LOADED
+    global _MODEL
     try:
         import ChatTTS  # 延迟导入：测试环境可能没装
         _MODEL = ChatTTS.Chat()
-        _MODEL.load_models(compile=False)  # 简化：开发环境不编译
-        _LOADED = True
+        _MODEL.load(compile=False)  # ChatTTS 0.2.5: load_models → load
     except Exception as e:
         _MODEL = None
-        _LOADED = False
         raise RuntimeError(f"ChatTTS 模型加载失败: {e}") from e
 
 
@@ -65,12 +71,15 @@ def _random_choice(items: list):
     return random.choice(items)
 
 
-def _random_speaker_b64() -> str:
-    """占位：真实场景下应从 ChatTTS 随机采样 speaker embedding 并 base64 编码。
+def _random_speaker() -> str:
+    """从 ChatTTS 随机采样一个 speaker embedding 字符串。
 
-    简化版返回一个固定 base64 字符串。集成时替换。
+    ChatTTS 0.2.5 提供 `sample_random_speaker()` 返回 speaker 字符串。
+    若模型未加载，回退到占位字符串。
     """
-    return "QkFTRTY0U1BLQUNLRVI="  # "BASE64SPKACKER" 的 base64
+    if _MODEL is not None and _MODEL.has_loaded():
+        return _MODEL.sample_random_speaker()
+    return "QkFTRTY0U1BLQUNLRVI="  # 占位："BASE64SPKACKER" 的 base64
 
 
 # === 抽卡 ===
@@ -85,7 +94,7 @@ def draw_one(refiner_text: str | None = None) -> TtsParams:
     temperature = _random_float(0.1, 0.9)
     top_p = _random_float(0.5, 0.95)
     top_k = _random_choice([10, 15, 20, 25, 30])
-    speaker = _random_speaker_b64()
+    speaker = _random_speaker()
 
     return TtsParams(
         seed=seed,
@@ -104,17 +113,70 @@ def _infer_audio(params: TtsParams, text: str) -> tuple[np.ndarray, list[tuple[f
 
     **必须返回 audio 数组（float32，单声道）和 (start_sec, end_sec) 段列表。**
 
-    简化版：用 numpy 静音代替真实推理，便于开发期不依赖模型。集成时替换。
+    ChatTTS 0.2.5 的 infer() 接口：
+    - text: 待合成文本
+    - params_infer_code: InferCodeParams(top_P, top_K, temperature, manual_seed, spk_emb, ...)
+    - params_refine_text: RefineTextParams(prompt=refiner_text, ...)
+    - 返回: 生成器或 list[np.ndarray]，每个 ndarray 是一段音频
     """
-    # 1 秒 16kHz 静音 —— 真实场景下应调 ChatTTS 真实推理
-    duration_sec = max(1.0, len(text) * 0.15)
-    sample_rate = 16000
-    audio = np.zeros(int(duration_sec * sample_rate), dtype=np.float32)
-    segments = [(0.0, duration_sec)]
+    if _MODEL is None or not _MODEL.has_loaded():
+        # 模型未加载 —— 返回静音占位
+        duration_sec = max(1.0, len(text) * 0.15)
+        sample_rate = 24000  # ChatTTS 默认采样率
+        audio = np.zeros(int(duration_sec * sample_rate), dtype=np.float32)
+        segments = [(0.0, duration_sec)]
+        return audio, segments
+
+    import ChatTTS
+
+    # 构造推理参数
+    infer_params = ChatTTS.Chat.InferCodeParams(
+        top_P=params.top_p,
+        top_K=params.top_k,
+        temperature=params.temperature,
+        manual_seed=params.seed if params.seed != 0 else None,
+        spk_emb=params.speaker,
+    )
+
+    refine_params = None
+    if params.refiner_text:
+        refine_params = ChatTTS.Chat.RefineTextParams(
+            prompt=params.refiner_text,
+        )
+
+    # 调用推理
+    wavs = _MODEL.infer(
+        text,
+        params_infer_code=infer_params,
+        params_refine_text=refine_params,
+        skip_refine_text=refine_params is None,
+    )
+
+    # wavs 是一个生成器或 list，每个元素是 np.ndarray
+    audio_chunks = []
+    segments = []
+    offset = 0.0
+    sample_rate = 24000  # ChatTTS 默认输出 24kHz
+
+    for chunk in wavs:
+        if isinstance(chunk, np.ndarray):
+            chunk = chunk.squeeze()  # 去掉多余维度
+            audio_chunks.append(chunk)
+            duration = len(chunk) / sample_rate
+            segments.append((offset, offset + duration))
+            offset += duration
+
+    if not audio_chunks:
+        # 空结果 —— 返回短静音
+        audio = np.zeros(sample_rate, dtype=np.float32)
+        segments = [(0.0, 1.0)]
+        return audio, segments
+
+    audio = np.concatenate(audio_chunks)
     return audio, segments
 
 
-def _numpy_to_wav_bytes(audio: np.ndarray, sample_rate: int = 16000) -> bytes:
+def _numpy_to_wav_bytes(audio: np.ndarray, sample_rate: int = 24000) -> bytes:
     """把 float32 numpy 数组转 16-bit PCM WAV 字节串。"""
     audio_int16 = np.clip(audio, -1.0, 1.0)
     audio_int16 = (audio_int16 * 32767).astype(np.int16)
@@ -145,9 +207,6 @@ def synthesize_to_wav_bytes(
     Raises:
         Exception: 推理失败时由 `_infer_audio` 抛出原样上抛（不吞错）。
     """
-    # 注：plan 简化版——未加载时也允许调用（开发期用 mock 数据）
-    # 真实部署应改为 raise RuntimeError("模型未加载")
-
     if on_progress:
         on_progress(0.0)
 

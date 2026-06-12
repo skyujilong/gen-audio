@@ -7,10 +7,8 @@ from app.core.chat_tts import draw_one, synthesize_to_wav_bytes, is_model_loaded
 
 def test_is_model_loaded_initially_false(monkeypatch):
     """在不真正加载模型的情况下，初始状态应为 False。"""
-    # chat_tts 模块使用 module-level 单例；reset 让测试隔离
     from app.core import chat_tts
     chat_tts._MODEL = None
-    chat_tts._LOADED = False
     assert is_model_loaded() is False
 
 
@@ -18,13 +16,12 @@ def test_draw_one_returns_valid_params(monkeypatch):
     """不真正加载模型；patch 掉随机来源。"""
     from app.core import chat_tts
     chat_tts._MODEL = None
-    chat_tts._LOADED = False
 
     # patch random 函数让它返回确定值
     monkeypatch.setattr("app.core.chat_tts._random_int", lambda lo, hi: 12345)
     monkeypatch.setattr("app.core.chat_tts._random_float", lambda lo, hi: 0.5)
     monkeypatch.setattr("app.core.chat_tts._random_choice", lambda items: items[0])
-    monkeypatch.setattr("app.core.chat_tts._random_speaker_b64", lambda: "BASE64SPEAKER")
+    monkeypatch.setattr("app.core.chat_tts._random_speaker", lambda: "BASE64SPEAKER")
 
     params = draw_one(refiner_text=None)
     assert isinstance(params, TtsParams)
@@ -40,11 +37,10 @@ def test_synthesize_to_wav_bytes_returns_wav_bytes(monkeypatch):
     """mock 真正的 ChatTTS 推理，验证接口形状。"""
     from app.core import chat_tts
     chat_tts._MODEL = None
-    chat_tts._LOADED = False
 
     def fake_infer(params, text):
-        # 返回 1 秒 16kHz 单声道浮点
-        return np.zeros(16000, dtype=np.float32), [(0.0, 1.0)]
+        # 返回 1 秒 24kHz 单声道浮点
+        return np.zeros(24000, dtype=np.float32), [(0.0, 1.0)]
 
     monkeypatch.setattr("app.core.chat_tts._infer_audio", fake_infer)
 
@@ -59,10 +55,9 @@ def test_synthesize_to_wav_bytes_returns_wav_bytes(monkeypatch):
 def test_synthesize_invokes_progress_callback(monkeypatch):
     from app.core import chat_tts
     chat_tts._MODEL = None
-    chat_tts._LOADED = False
 
     def fake_infer(params, text):
-        return np.zeros(16000, dtype=np.float32), [(0.0, 1.0)]
+        return np.zeros(24000, dtype=np.float32), [(0.0, 1.0)]
 
     monkeypatch.setattr("app.core.chat_tts._infer_audio", fake_infer)
 

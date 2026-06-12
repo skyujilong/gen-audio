@@ -20,6 +20,9 @@ __pycache__/
 .venv/
 venv/
 
+# ChatTTS 模型文件（首次加载自动下载，约 500MB+）
+asset/
+
 # 测试 / 工具
 .pytest_cache/
 .superpowers/
