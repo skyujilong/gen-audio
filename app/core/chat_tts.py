@@ -257,6 +257,9 @@ def _refine_text(params: TtsParams, text: str) -> str:
     - 用 `replace_tokens` 保护用户注入的 control token（[oral_X] / [laugh_X] / [break_X]），
       避免被 refine 模型破坏。
     - 返回精炼后的文本（占位符已恢复回原 token）。
+
+    Implementation note: 这版 ChatTTS 没有独立的 `refine_text()` 方法，
+    改走统一的 `infer(..., refine_text_only=True)` 拿到 `list[str]`。
     """
     if _MODEL is None or not _MODEL.has_loaded():
         # 模型未加载 —— 跳过 refine
@@ -269,10 +272,13 @@ def _refine_text(params: TtsParams, text: str) -> str:
     if refine_params is None:
         return text  # 无可精炼
 
-    refined_safe = _MODEL.refine_text(
+    refined_safe_list = _MODEL.infer(
         safe_text,
-        params=refine_params,
+        params_refine_text=refine_params,
+        refine_text_only=True,
     )
+    # `refine_text_only=True` 返回 `list[str]`，取第一个元素
+    refined_safe = refined_safe_list[0] if refined_safe_list else safe_text
     # 恢复 control token
     return restore_tokens(refined_safe, pairs)
 

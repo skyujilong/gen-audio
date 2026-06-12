@@ -403,17 +403,24 @@ def test_infer_audio_two_step_calls_refine_then_synth(monkeypatch):
 
 
 def test_refine_text_protects_tokens(monkeypatch):
-    """_refine_text 调真实模型时，应先 replace_tokens 保护 control token。"""
+    """_refine_text 调真实模型时，应先 replace_tokens 保护 control token。
+
+    实现说明：这版 ChatTTS 没有独立 `refine_text()`，refine 走统一的
+    `infer(..., refine_text_only=True)`，收到 `list[str]`。
+    """
     from app.core import chat_tts
     chat_tts._MODEL = None
-    # 模拟有模型，但只检查 refine_text 收到的 text
+    # 模拟有模型，但只检查 infer 收到的 text
     refine_received = []
 
     class _FakeModel:
         def has_loaded(self): return True
-        def refine_text(self, text, params):
-            refine_received.append(text)
-            return text
+        def infer(self, text, **kwargs):
+            # 只在 refine_text_only=True 时捕获
+            if kwargs.get("refine_text_only"):
+                refine_received.append(text)
+                return [text]  # list[str]
+            raise RuntimeError("not expected in this test")
 
     chat_tts._MODEL = _FakeModel()
     monkeypatch.setattr(chat_tts, "_build_refine_text_params",
