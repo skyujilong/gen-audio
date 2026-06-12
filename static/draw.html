@@ -2,20 +2,119 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>抽卡 · gen-audio</title>
+  <title>生成 · gen-audio</title>
   <link rel="stylesheet" href="/css/main.css" />
 </head>
 <body>
   <nav class="top-nav">
-    <a href="/draw" class="active">抽卡</a>
+    <a href="/draw" class="active">生成</a>
     <a href="/favorites">列表</a>
     <a href="/synthesize">合成</a>
   </nav>
-  <h1>🎲 抽卡</h1>
-  <p class="muted">随机生成一组 ChatTTS 参数 + 自动合 demo 试听。</p>
+  <h1>🔊 生成</h1>
+  <p class="muted">调整参数后生成；seed 和音色每次随机，其余保留你的设置。</p>
+
+  <div class="card" id="params-form">
+    <!-- seed -->
+    <div class="form-row">
+      <label>Seed</label>
+      <div class="row">
+        <input type="number" id="f-seed" placeholder="随机" style="flex:1" min="0" max="2147483647" />
+        <button id="rand-seed-btn" class="secondary" type="button">🎲</button>
+      </div>
+    </div>
+    <!-- temperature -->
+    <div class="form-row">
+      <label>Temperature</label>
+      <div class="row">
+        <input type="range" id="f-temp-range" min="0.00001" max="1" step="0.01" value="0.3" />
+        <input type="number" id="f-temp" value="0.3" min="0.00001" max="1" step="0.01" style="width:80px" />
+      </div>
+    </div>
+    <!-- top_p -->
+    <div class="form-row">
+      <label>Top P</label>
+      <div class="row">
+        <input type="range" id="f-topp-range" min="0.1" max="0.9" step="0.05" value="0.7" />
+        <input type="number" id="f-topp" value="0.7" min="0.1" max="0.9" step="0.05" style="width:80px" />
+      </div>
+    </div>
+    <!-- top_k -->
+    <div class="form-row">
+      <label>Top K</label>
+      <div class="row">
+        <input type="range" id="f-topk-range" min="1" max="20" step="1" value="20" />
+        <input type="number" id="f-topk" value="20" min="1" max="20" step="1" style="width:80px" />
+      </div>
+    </div>
+    <!-- repetition_penalty -->
+    <div class="form-row">
+      <label>Repetition Penalty</label>
+      <div class="row">
+        <input type="range" id="f-reppen-range" min="1.0" max="2.0" step="0.05" value="1.05" />
+        <input type="number" id="f-reppen" value="1.05" min="1.0" max="2.0" step="0.05" style="width:80px" />
+      </div>
+    </div>
+    <!-- speed -->
+    <div class="form-row">
+      <label>语速 Speed</label>
+      <select id="f-speed">
+        <option value="[speed_1]">1 - 极慢</option>
+        <option value="[speed_2]">2 - 很慢</option>
+        <option value="[speed_3]">3 - 偏慢</option>
+        <option value="[speed_4]">4 - 略慢</option>
+        <option value="[speed_5]" selected>5 - 正常</option>
+        <option value="[speed_6]">6 - 略快</option>
+        <option value="[speed_7]">7 - 偏快</option>
+        <option value="[speed_8]">8 - 很快</option>
+        <option value="[speed_9]">9 - 极快</option>
+      </select>
+    </div>
+    <!-- max_new_token -->
+    <div class="form-row">
+      <label>Max Tokens</label>
+      <input type="number" id="f-max-token" value="2048" min="256" max="4096" step="256" style="width:120px" />
+    </div>
+    <!-- speaker -->
+    <div class="form-row">
+      <label>音色 Speaker</label>
+      <div class="row">
+        <span id="f-speaker-tag" class="tag">随机</span>
+        <button id="rand-speaker-btn" class="secondary" type="button">🎲 随机</button>
+        <button id="copy-speaker-btn" class="secondary" type="button">📋 复制</button>
+      </div>
+      <input type="hidden" id="f-speaker" />
+    </div>
+    <!-- refiner_text -->
+    <div class="form-row">
+      <label>Refiner 提示词</label>
+      <input type="text" id="f-refiner" placeholder="如 [oral_2][laugh_1]" />
+    </div>
+    <!-- skip_refine_text -->
+    <div class="form-row">
+      <label>
+        <input type="checkbox" id="f-skip-refine" /> 跳过文本精炼（加速推理）
+      </label>
+    </div>
+    <!-- spk_smp (声音克隆) -->
+    <div class="form-row">
+      <label>参考音频 Speaker（声音克隆）</label>
+      <input type="text" id="f-spk-smp" placeholder="粘贴 base64 speaker prompt" />
+    </div>
+    <!-- txt_smp -->
+    <div class="form-row">
+      <label>参考音频文本</label>
+      <input type="text" id="f-txt-smp" placeholder="参考音频对应的文本" />
+    </div>
+    <!-- demo_text -->
+    <div class="form-row">
+      <label>试听文本</label>
+      <textarea id="f-demo-text" rows="2">你好，这是一段声音测试。</textarea>
+    </div>
+  </div>
 
   <div style="margin: 24px 0; text-align: center;">
-    <button id="draw-btn" style="font-size: 16px; padding: 12px 32px;">🎲 抽一张</button>
+    <button id="draw-btn" style="font-size: 16px; padding: 12px 32px;">🔊 生成</button>
   </div>
 
   <div id="card-panel" style="display:none;">

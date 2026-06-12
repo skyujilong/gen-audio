@@ -56,6 +56,32 @@ input[type="text"], textarea {
 }
 textarea { resize: vertical; min-height: 60px; }
 
+input[type="number"] {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid #d2d2d7;
+  border-radius: 6px;
+  background: #fff;
+}
+input[type="range"] { flex: 1; }
+
+select {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid #d2d2d7;
+  border-radius: 6px;
+  background: #fff;
+}
+input[type="checkbox"] { margin-right: 4px; }
+
+.form-row { margin-bottom: 12px; }
+.form-row > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
 .card {
   background: #fff;
   border: 1px solid #d2d2d7;

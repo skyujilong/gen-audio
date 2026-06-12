@@ -1,4 +1,4 @@
-"""Pydantic v2 模型：抽卡 / 合成 / 任务 / 卡片 / 导入 / 健康检查。
+"""Pydantic v2 模型：生成 / 合成 / 任务 / 卡片 / 导入 / 健康检查。
 
 所有 API 的请求和响应都用这些模型。前端通过 OpenAPI 自动生成的 schema 也能看到。
 """
@@ -21,7 +21,13 @@ class TtsParams(BaseModel):
         top_p: nucleus sampling 阈值。
         top_k: top-k sampling 阈值。
         speaker: ChatTTS speaker embedding（base64 字符串）。
-        refiner_text: 风格 prompt（可选）。
+        refiner_text: 风格 prompt（可选），如 [oral_2][laugh_1]。
+        repetition_penalty: 重复惩罚，>1 抑制重复。
+        speed: 语速控制 token，默认 [speed_5]。
+        skip_refine_text: 跳过文本精炼，可加速推理。
+        max_new_token: 最大生成 token 数。
+        spk_smp: 参考音频 speaker（声音克隆），base64 字符串。
+        txt_smp: 参考音频对应文本。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -32,17 +38,41 @@ class TtsParams(BaseModel):
     top_k: int = 20
     speaker: str
     refiner_text: str | None = None
+    repetition_penalty: float = 1.05
+    speed: str = "[speed_5]"
+    skip_refine_text: bool = False
+    max_new_token: int = 2048
+    spk_smp: str | None = None
+    txt_smp: str | None = None
 
 
-# === 抽卡 ===
+# === 常量 ===
+
+DEFAULT_DEMO_TEXT = "你好，这是一段声音测试。"
+"""导入卡片时若 `demo_text` 为空，后端填这个默认值。"""
+
+
+# === 生成 ===
 
 class DrawRequest(BaseModel):
-    """抽卡请求。`refiner_text` 可选；其他参数后端随机生成。"""
+    """生成请求。seed/speaker 缺省时后端随机；其余字段缺省用默认值。"""
+    seed: int | None = None          # None → 随机
+    temperature: float = 0.3
+    top_p: float = 0.7
+    top_k: int = 20
+    speaker: str | None = None       # None → 随机
     refiner_text: str | None = None
+    demo_text: str = DEFAULT_DEMO_TEXT  # 试听文本
+    repetition_penalty: float = 1.05
+    speed: str = "[speed_5]"
+    skip_refine_text: bool = False
+    max_new_token: int = 2048
+    spk_smp: str | None = None
+    txt_smp: str | None = None
 
 
 class DrawnCard(BaseModel):
-    """抽卡响应。"""
+    """生成响应。"""
     card_id: int
     params: TtsParams
     demo_text: str
@@ -141,9 +171,3 @@ class Job(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
-
-
-# === 常量 ===
-
-DEFAULT_DEMO_TEXT = "你好，这是一段声音测试。"
-"""导入卡片时若 `demo_text` 为空，后端填这个默认值。"""

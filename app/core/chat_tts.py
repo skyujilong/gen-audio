@@ -2,7 +2,7 @@
 
 对外暴露三个函数：
 - `is_model_loaded()`: 当前模型是否已加载进内存。
-- `draw_one(refiner_text)`: 抽卡 —— 随机生成一个 `TtsParams`。
+- `draw_one(refiner_text)`: 生成 —— 随机生成一个 `TtsParams`。
 - `synthesize_to_wav_bytes(params, text, on_progress)`: 用指定参数合成一段音频。
 
 设计要点：
@@ -82,20 +82,51 @@ def _random_speaker() -> str:
     return "QkFTRTY0U1BLQUNLRVI="  # 占位："BASE64SPKACKER" 的 base64
 
 
-# === 抽卡 ===
+# === 生成 ===
 
 def draw_one(refiner_text: str | None = None) -> TtsParams:
-    """抽卡：随机生成完整 `TtsParams`。
+    """生成：随机生成完整 `TtsParams`（seed/speaker 随机，其余默认值）。
 
     Args:
         refiner_text: 可选风格 prompt；为 None 时不设置。
     """
-    seed = _random_int(0, 2**31 - 1)
-    temperature = _random_float(0.1, 0.9)
-    top_p = _random_float(0.5, 0.95)
-    top_k = _random_choice([10, 15, 20, 25, 30])
-    speaker = _random_speaker()
+    return draw_one_from_params(refiner_text=refiner_text)
 
+
+def draw_one_from_params(
+    seed: int | None = None,
+    temperature: float = 0.3,
+    top_p: float = 0.7,
+    top_k: int = 20,
+    speaker: str | None = None,
+    refiner_text: str | None = None,
+    repetition_penalty: float = 1.05,
+    speed: str = "[speed_5]",
+    skip_refine_text: bool = False,
+    max_new_token: int = 2048,
+    spk_smp: str | None = None,
+    txt_smp: str | None = None,
+) -> TtsParams:
+    """生成：seed/speaker 为 None 时随机，其余使用传入值。
+
+    Args:
+        seed: 随机种子，None 时随机生成。
+        temperature: 采样温度。
+        top_p: nucleus sampling 阈值。
+        top_k: top-k sampling 阈值。
+        speaker: speaker embedding，None 时随机采样。
+        refiner_text: 可选风格 prompt。
+        repetition_penalty: 重复惩罚，>1 抑制重复。
+        speed: 语速控制 token。
+        skip_refine_text: 跳过文本精炼。
+        max_new_token: 最大生成 token 数。
+        spk_smp: 参考音频 speaker（声音克隆）。
+        txt_smp: 参考音频对应文本。
+    """
+    if seed is None:
+        seed = _random_int(0, 2**31 - 1)
+    if speaker is None:
+        speaker = _random_speaker()
     return TtsParams(
         seed=seed,
         temperature=temperature,
@@ -103,6 +134,12 @@ def draw_one(refiner_text: str | None = None) -> TtsParams:
         top_k=top_k,
         speaker=speaker,
         refiner_text=refiner_text,
+        repetition_penalty=repetition_penalty,
+        speed=speed,
+        skip_refine_text=skip_refine_text,
+        max_new_token=max_new_token,
+        spk_smp=spk_smp,
+        txt_smp=txt_smp,
     )
 
 
@@ -117,8 +154,7 @@ def _infer_audio(params: TtsParams, text: str) -> tuple[np.ndarray, list[tuple[f
     - text: 待合成文本
     - params_infer_code: InferCodeParams(top_P, top_K, temperature, manual_seed, spk_emb, ...)
     - params_refine_text: RefineTextParams(prompt=refiner_text, ...)
-    - 返回: 生成器或 list[np.ndarray]，每个 ndarray 是一段音频
-    """
+    - 返回: 生成器或 list[np.ndarray]，    """
     if _MODEL is None or not _MODEL.has_loaded():
         # 模型未加载 —— 返回静音占位
         duration_sec = max(1.0, len(text) * 0.15)
@@ -130,13 +166,23 @@ def _infer_audio(params: TtsParams, text: str) -> tuple[np.ndarray, list[tuple[f
     import ChatTTS
 
     # 构造推理参数
-    infer_params = ChatTTS.Chat.InferCodeParams(
+    infer_kwargs = dict(
         top_P=params.top_p,
         top_K=params.top_k,
         temperature=params.temperature,
         manual_seed=params.seed if params.seed != 0 else None,
         spk_emb=params.speaker,
+        repetition_penalty=params.repetition_penalty,
+        prompt=params.speed,
+        max_new_token=params.max_new_token,
     )
+    # 声音克隆参数（可选）
+    if params.spk_smp:
+        infer_kwargs["spk_smp"] = params.spk_smp
+    if params.txt_smp:
+        infer_kwargs["txt_smp"] = params.txt_smp
+
+    infer_params = ChatTTS.Chat.InferCodeParams(**infer_kwargs)
 
     refine_params = None
     if params.refiner_text:
@@ -144,12 +190,15 @@ def _infer_audio(params: TtsParams, text: str) -> tuple[np.ndarray, list[tuple[f
             prompt=params.refiner_text,
         )
 
+    # skip_refine_text: 用户显式跳过 或 没有精炼参数
+    should_skip = params.skip_refine_text or (refine_params is None)
+
     # 调用推理
     wavs = _MODEL.infer(
         text,
         params_infer_code=infer_params,
         params_refine_text=refine_params,
-        skip_refine_text=refine_params is None,
+        skip_refine_text=should_skip,
     )
 
     # wavs 是一个生成器或 list，每个元素是 np.ndarray

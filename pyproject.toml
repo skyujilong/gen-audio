@@ -1,7 +1,7 @@
 [project]
 name = "gen-audio"
 version = "0.1.0"
-description = "本地单用户 TTS 抽卡 + 批量合成工具"
+description = "本地单用户 TTS 生成 + 批量合成工具"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
