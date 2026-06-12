@@ -654,3 +654,92 @@ def test_e2e_synthesize_passes_every_panel_field_through(tmp_path, monkeypatch):
         # 里被覆盖为 voice-B 的 tensor_base64 快照（双轨设计）。
         assert persisted["speaker_id"] == sid_b
         assert persisted["speaker"] == _sample_base64()
+
+
+def test_e2e_synthesize_frontend_default_submit_path(tmp_path, monkeypatch):
+    """回归：用户在前端选卡 + 改 oral/laugh/break_ + 不动音色，模拟 _buildSubmitParams
+    真实行为 → 提交必须 200 + audio.wav 真实有内容（不是 0 长度静音）。
+
+    修过两个 bug：
+    1) 前端 _buildSubmitParams 漏 fallback 到 state.selectedCard.params.speaker
+       → 提交 speaker='' → 后端 LZMAError → job failed
+    2) refine 阶段把 [oral_X][laugh_X][break_X] 喂 GPT 容易塌缩成单字
+       → 改塞 infer_code.prompt 前缀
+    """
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "DB_PATH", tmp_path / "data" / "gen-audio.db")
+    monkeypatch.setattr(main_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(main_mod, "SPEAKERS_DIR", tmp_path / "data" / "speakers")
+    client, _ = _setup(tmp_path)
+
+    # 抽卡得到带真实 speaker 字符串的卡
+    import app.api.draw as draw_mod
+    monkeypatch.setattr(
+        draw_mod, "draw_one_from_params",
+        lambda **kw: TtsParams(seed=42, speaker=_sample_base64(), oral=1, laugh=0, break_=0),
+    )
+    monkeypatch.setattr(
+        draw_mod, "synthesize_to_wav_bytes",
+        lambda params, text, on_progress=None: (b"x", [(0.0, 1.0)]),
+    )
+    cid = client.post("/api/draw", json={}).json()["card_id"]
+    detail = client.get(f"/api/cards/{cid}").json()
+    real_speaker = detail["params"]["speaker"]
+    assert len(real_speaker) > 0, "卡必须带真实 speaker 字符串"
+
+    # 模拟前端 _buildSubmitParams 完整行为：
+    #   - panel.getParams() 不返回 speaker / speaker_id（这俩在 param-panel 之外）
+    #   - state.selectedCard.speaker_id is null
+    #   - 修复后：state.selectedCard.params.speaker 非空 → 用它
+    submission = {k: v for k, v in detail["params"].items()
+                  if k not in ("speaker", "speaker_id")}
+    # 用户改 oral=5 laugh=3 break_=4
+    submission["oral"] = 5
+    submission["laugh"] = 3
+    submission["break_"] = 4
+    # 修复后：fallback 到 card 自带 speaker
+    submission["speaker"] = real_speaker
+    submission.pop("speaker_id", None)
+    # 兜底 seed
+    submission["seed"] = detail["params"].get("seed", 42)
+
+    # mock worker，验证确实走到 synthesize_to_wav_bytes
+    from app.core import queue as queue_mod_inner
+    real_wav_called = []
+    async def fake_synth(card_id, text, params, on_progress=None, job_id=None):
+        real_wav_called.append((text, params))
+        from app.storage.files import write_synthesis_files
+        if on_progress: on_progress(1.0)
+        # 模拟真实 ChatTTS：返回 4s 的非空 audio bytes
+        import struct, io, wave as _wave
+        buf = io.BytesIO()
+        with _wave.open(buf, "wb") as wf:
+            wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000)
+            # 4s 的「有意义」音频（不是全 0 静音）
+            samples = b"\x10\x00" * 24000 * 4
+            wf.writeframes(samples)
+        paths = write_synthesis_files(
+            data_root=config.DATA_ROOT, card_id=card_id, job_id=job_id,
+            audio_bytes=buf.getvalue(),
+            srt="00:00:00,000 --> 00:00:04,000\n" + text,
+            params=params,
+        )
+        return paths["audio_path"], paths["subtitle_path"], paths["params_path"]
+    monkeypatch.setattr(queue_mod_inner, "synthesize_with_progress", fake_synth)
+
+    with TestClient(app) as poll_client:
+        res = poll_client.post("/api/synthesize", json={
+            "card_id": cid, "params": submission, "text": "测试 oral/laugh/break_",
+        })
+        assert res.status_code == 200, res.text
+        job = res.json()
+        # 落库参数必须含 oral/laugh/break_ 全量 + 真实 speaker
+        assert job["params"]["oral"] == 5
+        assert job["params"]["laugh"] == 3
+        assert job["params"]["break_"] == 4
+        assert job["params"]["speaker"] == real_speaker  # 兜底后保留
+        # 验证 worker 真的被调了
+        assert len(real_wav_called) == 1
+        called_text, called_params = real_wav_called[0]
+        assert called_text == "测试 oral/laugh/break_"
+        assert called_params.oral == 5

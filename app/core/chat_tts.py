@@ -129,7 +129,10 @@ def _build_infer_code_params(params: TtsParams) -> Any:
     """把 `TtsParams` 拼装成 ChatTTS 的 `InferCodeParams`。
 
     关键映射：
-    - `speed: int` → `prompt="[speed_X]"`
+    - `speed: int` → `prompt` 前缀 `"[speed_X]"`
+    - `oral` / `laugh` / `break_` → `prompt` 前缀 `"[oral_X][laugh_X][break_X]"`
+      （Phase 6.x 关键改动：实测发现把这些 control tokens 放 refine_text 阶段
+       容易 GPT 塌缩 → 移到 infer_code.prompt 直接做 prefix 注入，更稳定）
     - `top_p` → `top_P`（ChatTTS 命名约定）
     - `top_k` → `top_K`
     - `seed=0` → `manual_seed=None`（让 ChatTTS 自己随机）
@@ -139,6 +142,14 @@ def _build_infer_code_params(params: TtsParams) -> Any:
         `ChatTTS.Chat.InferCodeParams` 实例（或测试 fake 类实例）。
     """
     InferCodeParams, _ = _get_chat_classes()
+    # 拼 prompt 前缀：先 [speed_X] 再 [oral_X][laugh_X][break_X]（顺序与官方 ChatTTS 示例一致）
+    prompt_parts = [f"[speed_{params.speed}]"]
+    if params.oral:
+        prompt_parts.append(f"[oral_{params.oral}]")
+    if params.laugh:
+        prompt_parts.append(f"[laugh_{params.laugh}]")
+    if params.break_:
+        prompt_parts.append(f"[break_{params.break_}]")
     infer_kwargs: dict[str, Any] = dict(
         top_P=params.top_p,
         top_K=params.top_k,
@@ -146,7 +157,7 @@ def _build_infer_code_params(params: TtsParams) -> Any:
         manual_seed=params.seed if params.seed != 0 else None,
         spk_emb=params.speaker,
         repetition_penalty=params.repetition_penalty,
-        prompt=f"[speed_{params.speed}]",
+        prompt="".join(prompt_parts),
         max_new_token=params.max_new_token,
     )
     if params.spk_smp:
@@ -159,34 +170,19 @@ def _build_infer_code_params(params: TtsParams) -> Any:
 def _build_refine_text_params(params: TtsParams) -> Any | None:
     """把 `TtsParams` 拼装成 ChatTTS 的 `RefineTextParams`。
 
-    互斥逻辑：
-    1. 若 `refiner_text` 非空 → 用自由文本 prompt
-    2. 否则 → 由 `oral` / `laugh` / `break_` 3 整数拼 `[oral_X][laugh_X][break_X]`
-    3. 三者都=0 且 refiner_text 空 → 返回 None（不精炼）
-
-    额外补 `top_P/top_K/temperature` 让 refine 阶段采样与 infer_code 一致。
+    Phase 6.x 关键改动：
+    - `[oral_X][laugh_X][break_X]` 不再走 refine 阶段（实测 GPT 在 refine 阶段
+      容易塌缩成单字），而是塞到 infer_code.prompt 前缀里（见 _build_infer_code_params）。
+    - 本函数现在**只**在显式设置 `refiner_text`（自由文本 prompt）时才返回非 None。
     """
+    if not params.refiner_text:
+        return None
     _, RefineTextParams = _get_chat_classes()
-
-    if params.refiner_text:
-        prompt = params.refiner_text
-    else:
-        parts = []
-        if params.oral:
-            parts.append(f"[oral_{params.oral}]")
-        if params.laugh:
-            parts.append(f"[laugh_{params.laugh}]")
-        if params.break_:
-            parts.append(f"[break_{params.break_}]")
-        if not parts:
-            return None
-        prompt = "".join(parts)
-
     return RefineTextParams(
-        prompt=prompt,
+        prompt=params.refiner_text,
         top_P=params.top_p,
         top_K=params.top_k,
-        temperature=params.temperature,
+        temperature=0.7,
     )
 
 
@@ -323,6 +319,18 @@ def _synthesize_audio(
             len(audio), len(text), duration_sec,
         )
         return audio, segments
+
+    # Phase 6.x：synthesize 路径的兜底。draw 路由会显式 sample_random_speaker，
+    # 但 synthesize 路由只把前端 params.speaker 透传 —— 如果前端漏传了 speaker 字符串
+    # （如选了卡但没碰音色选择器，老前端逻辑会传 ''），这里采样一个随机音色，
+    # 避免 ChatTTS decode 抛 LZMAError 让整个 job 标 failed。
+    if not (params.speaker or "").strip() and params.speaker_id is None:
+        logger.info(
+            "[chat_tts] _synthesize_audio: speaker is empty and no speaker_id, "
+            "sampling random speaker (text_len=%d)", len(text),
+        )
+        params = params.model_copy(update={"speaker": _MODEL.sample_random_speaker()})
+        logger.info("[chat_tts] _synthesize_audio: sampled random speaker_len=%d", len(params.speaker))
 
     logger.info(
         "[chat_tts] _synthesize_audio start: text=%r speaker_len=%d speed=%d seed=%d oral=%d laugh=%d break_=%d",

@@ -271,7 +271,12 @@ function _buildSubmitParams() {
   for (const k of ['speed', 'oral', 'laugh', 'break_', 'top_k', 'nfe', 'max_new_token']) {
     if (typeof p[k] !== 'undefined') p[k] = Math.round(p[k]);
   }
-  // 音色优先级：state.currentSpeaker（用户改）> card 自带 speaker_id
+  // 音色优先级（关键修复）：
+  //   1) state.currentSpeaker（用户在「加载/随机音色」后改的）
+  //   2) state.selectedCard.speaker_id（卡自带音色库引用）
+  //   3) state.selectedCard.params.speaker（卡抽卡时定的 speaker 字符串快照）
+  //      —— 之前漏了这条，用户不动音色时传 speaker='' → 后端 LZMAError → 任务 failed
+  //   4) 后端 fallback 随机（speaker_id=null 且无字符串时）
   if (state.currentSpeaker) {
     if (state.currentSpeaker.speaker_id != null) {
       p.speaker_id = state.currentSpeaker.speaker_id;
@@ -280,12 +285,22 @@ function _buildSubmitParams() {
       p.speaker = state.currentSpeaker.tensor_base64;
       delete p.speaker_id;
     }
-  } else if (state.selectedCard && state.selectedCard.speaker_id != null) {
-    p.speaker_id = state.selectedCard.speaker_id;
-    delete p.speaker;
+  } else if (state.selectedCard) {
+    if (state.selectedCard.speaker_id != null) {
+      // 卡带音色库引用
+      p.speaker_id = state.selectedCard.speaker_id;
+      delete p.speaker;
+    } else if (typeof state.selectedCard.params?.speaker === 'string'
+               && state.selectedCard.params.speaker.length > 0) {
+      // 卡自带 speaker 字符串快照（最常见路径：用户没碰音色，但抽卡时已有 speaker）
+      p.speaker = state.selectedCard.params.speaker;
+      delete p.speaker_id;
+    }
+    // else: 卡没 speaker → 保持 null，让后端走 sample_random_speaker
   }
-  // TtsParams.speaker 是必填 str 字段；用 speaker_id 时要塞空串占位（后端 _resolve_speaker_id
-  // 会按 speaker_id 从库读 tensor_base64 覆盖之）
+  // TtsParams.speaker 是必填 str 字段；纯 speaker_id 模式或后端随机模式都塞空串占位
+  // （后端 _resolve_speaker_id 会按 speaker_id 从库读 tensor_base64 覆盖；
+  //  无 speaker_id 时 chat_tts 层会 sample_random_speaker 走随机分支）
   if (p.speaker == null) p.speaker = '';
   // TtsParams.seed 也是必填；synthesize 页 showSeed=false，panel 不渲染 seed 输入。
   // 沿用抽卡时的 seed 保持可复现性；若卡没 seed 才 fallback 随机。
