@@ -543,3 +543,114 @@ def test_e2e_synthesize_panel_no_seed_must_422_without_card_seed(tmp_path, monke
         assert job["params"]["seed"] == 42
         assert job["params"]["oral"] == 5
         assert job["params"]["laugh"] == 3
+
+
+def test_e2e_synthesize_passes_every_panel_field_through(tmp_path, monkeypatch):
+    """回归：前端 param-panel 暴露 16 个字段，模拟「synthesize.js _buildSubmitParams()」
+    全量提交 + 选 voice-B 改音色」后，落库的 job.params 必须保留全部 16 个字段。
+    """
+    import app.main as main_mod
+    monkeypatch.setattr(main_mod, "DB_PATH", tmp_path / "data" / "gen-audio.db")
+    monkeypatch.setattr(main_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(main_mod, "SPEAKERS_DIR", tmp_path / "data" / "speakers")
+    client, _ = _setup(tmp_path)
+
+    # 建一个 speaker 库项
+    sid_b = client.post("/api/speakers", json={
+        "name": "voice-B",
+        "tensor_base64": _sample_base64(),
+    }).json()["id"]
+
+    # mock 抽卡 + worker
+    import app.api.draw as draw_mod
+    monkeypatch.setattr(
+        draw_mod, "draw_one_from_params",
+        lambda **kw: TtsParams(seed=42, speaker=_sample_base64()),
+    )
+    monkeypatch.setattr(
+        draw_mod, "synthesize_to_wav_bytes",
+        lambda params, text, on_progress=None: (b"x", [(0.0, 1.0)]),
+    )
+    cid = client.post("/api/draw", json={}).json()["card_id"]
+
+    # 模拟前端 _buildSubmitParams 行为：
+    #   1) 拉 panel.getParams() → 16 字段
+    #   2) 设 oral/laugh/break_/enhance/denoise 等所有可改字段
+    #   3) state.currentSpeaker = voice-B → p.speaker_id=sid_b; delete p.speaker
+    panel_full = {
+        "seed": 42,                                  # 兜底自 card
+        "temperature": 0.42,
+        "top_p": 0.55,
+        "top_k": 15,
+        "repetition_penalty": 1.15,
+        "speed": 6,
+        "oral": 5,                                   # 风格
+        "laugh": 3,                                  # 风格
+        "break_": 4,                                 # 风格
+        "max_new_token": 1536,
+        "skip_refine_text": False,
+        "enhance_audio": True,                       # 增强
+        "denoise_audio": True,                       # 降噪
+        "solver": "rk4",                             # 增强
+        "nfe": 32,                                   # 增强
+        "tau": 0.3,                                  # 增强
+    }
+    # state.currentSpeaker = { speaker_id: sid_b, ... }
+    panel_full["speaker_id"] = sid_b
+    panel_full.pop("speaker", None)                  # 库引用优先 → 清空字符串
+    panel_full["speaker"] = ""                       # TtsParams.speaker 必填占位
+
+    # mock worker
+    from app.core import queue as queue_mod_inner
+    async def fake_synth(card_id, text, params, on_progress=None, job_id=None):
+        from app.storage.files import write_synthesis_files
+        if on_progress: on_progress(1.0)
+        paths = write_synthesis_files(
+            data_root=config.DATA_ROOT, card_id=card_id, job_id=job_id,
+            audio_bytes=b"JOB", srt="00:00:00,000 --> 00:00:01,000\nx",
+            params=params,
+        )
+        return paths["audio_path"], paths["subtitle_path"], paths["params_path"]
+    monkeypatch.setattr(queue_mod_inner, "synthesize_with_progress", fake_synth)
+
+    with TestClient(app) as poll_client:
+        res = poll_client.post("/api/synthesize", json={
+            "card_id": cid, "params": panel_full, "text": "全字段测试",
+        })
+        assert res.status_code == 200, res.text
+        job = res.json()
+        persisted = job["params"]
+
+        # 关键断言：16 个 panel 字段全部出现在落库的 job.params
+        expected_keys = {
+            "seed", "temperature", "top_p", "top_k", "repetition_penalty",
+            "speed", "oral", "laugh", "break_",
+            "max_new_token", "skip_refine_text",
+            "enhance_audio", "denoise_audio", "solver", "nfe", "tau",
+            "speaker", "speaker_id",
+        }
+        actual_keys = set(persisted.keys())
+        missing = expected_keys - actual_keys
+        assert not missing, f"前端传的字段被后端丢了: {missing}"
+
+        # 数值精确比对（验证整数 round 没出错）
+        assert persisted["seed"] == 42
+        assert persisted["oral"] == 5
+        assert persisted["laugh"] == 3
+        assert persisted["break_"] == 4
+        assert persisted["speed"] == 6
+        assert persisted["top_k"] == 15
+        assert persisted["nfe"] == 32
+        assert persisted["max_new_token"] == 1536
+        assert persisted["temperature"] == 0.42
+        assert persisted["top_p"] == 0.55
+        assert persisted["repetition_penalty"] == 1.15
+        assert persisted["tau"] == 0.3
+        assert persisted["solver"] == "rk4"
+        assert persisted["enhance_audio"] is True
+        assert persisted["denoise_audio"] is True
+        assert persisted["skip_refine_text"] is False
+        # 音色：选了 voice-B → speaker_id 落库；speaker 字符串在 _resolve_speaker_id
+        # 里被覆盖为 voice-B 的 tensor_base64 快照（双轨设计）。
+        assert persisted["speaker_id"] == sid_b
+        assert persisted["speaker"] == _sample_base64()
