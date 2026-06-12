@@ -8,11 +8,16 @@ numpy
 requests>=2.31
 
 # Phase 2.6: 音频增强 / 降噪
-# ⚠️ 风险：resemble-enhance==0.0.1 硬 pin torch==2.1.1/torchaudio==2.1.1
-#    并依赖 deepspeed（macOS 上 pip install 常因 ABI 不匹配失败）。
-#    建议用 `pip install resemble-enhance --no-deps` + 手动装 omegaconf/pytorch-lightning/soundfile/librosa/pandas/matplotlib/deepspeed
-#    （首次运行会从 HuggingFace 拉权重，需联网；离线需预下载并指定 run_dir）。
-resemble-enhance>=0.0.1
+# ⚠️ 风险：resemble-enhance==0.0.1 硬 pin torch==2.1.1/torchaudio==2.1.1（仅 cp311 ABI），
+#    在 Python 3.12 + macOS 环境下用 `uv add` / `pip install` 都会因 ABI 不匹配失败。
+#    正确装法（绕过它自带的硬 pin）：
+#      1) `pip install resemble-enhance --no-deps`         # 不让它拉 torch==2.1.1
+#      2) `pip install omegaconf pytorch-lightning soundfile librosa pandas matplotlib`  # 缺啥补啥
+#      3) macOS 通常装不上 deepspeed，跳过即可（Linux 才有意义）
+#    或更稳：直接 `pip install resemble-enhance==0.0.1 --no-deps`，再 `pip install --upgrade torch torchaudio` 兜底。
+#    ⚠️ 因此本文件**故意不列 resemble-enhance**，避免 `uv add -r` 误解析导致 abort。
+#    详见 docs/superpowers/plans/2026-06-12-chatts-enhanced-port.md 风险节 #9。
+# resemble-enhance>=0.0.1    # ← 注释掉，由上面步骤手动装
 
 # dev / test
 pytest>=8.0
