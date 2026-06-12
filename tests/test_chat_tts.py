@@ -169,3 +169,260 @@ def test_tts_params_new_fields_defaults():
     assert params.oral == 0
     assert params.laugh == 0
     assert params.break_ == 0
+
+
+# === Phase 2.2: _build_infer_code_params ===
+
+def test_build_infer_code_params_speed_5_prompts_speed_token(monkeypatch):
+    """speed=5 → prompt='[speed_5]'。"""
+    from app.core import chat_tts
+    # 避免 import ChatTTS（避免加载模型）
+    class _FakeInferCodeParams:
+        def __init__(self, **kw):
+            self.kw = kw
+    # 注入假类到 chat_tts 命名空间
+    monkeypatch.setattr(chat_tts, "_ChatInferCodeParams", _FakeInferCodeParams, raising=False)
+
+    params = TtsParams(seed=42, speaker="x", speed=5)
+    infer_params = chat_tts._build_infer_code_params(params)
+    assert infer_params.kw["prompt"] == "[speed_5]"
+
+
+def test_build_infer_code_params_speed_3_prompts_speed_3(monkeypatch):
+    from app.core import chat_tts
+    class _FakeInferCodeParams:
+        def __init__(self, **kw):
+            self.kw = kw
+    monkeypatch.setattr(chat_tts, "_ChatInferCodeParams", _FakeInferCodeParams, raising=False)
+
+    params = TtsParams(seed=1, speaker="x", speed=3)
+    infer_params = chat_tts._build_infer_code_params(params)
+    assert infer_params.kw["prompt"] == "[speed_3]"
+
+
+def test_build_infer_code_params_maps_all_tuning(monkeypatch):
+    """temperature/top_p/top_k/repetition_penalty/seed/speaker 都应透传。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeInferCodeParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatInferCodeParams", _FakeInferCodeParams, raising=False)
+
+    params = TtsParams(
+        seed=42, speaker="MYSPK",
+        temperature=0.5, top_p=0.8, top_k=15,
+        repetition_penalty=1.2, max_new_token=1024,
+    )
+    chat_tts._build_infer_code_params(params)
+    assert captured["top_P"] == 0.8
+    assert captured["top_K"] == 15
+    assert captured["temperature"] == 0.5
+    assert captured["repetition_penalty"] == 1.2
+    assert captured["max_new_token"] == 1024
+    assert captured["manual_seed"] == 42
+    assert captured["spk_emb"] == "MYSPK"
+    assert captured["prompt"] == "[speed_5]"
+
+
+def test_build_infer_code_params_seed_zero_uses_none(monkeypatch):
+    """seed=0 → manual_seed=None（让 ChatTTS 自己随机）。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeInferCodeParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatInferCodeParams", _FakeInferCodeParams, raising=False)
+
+    params = TtsParams(seed=0, speaker="x")
+    chat_tts._build_infer_code_params(params)
+    assert captured["manual_seed"] is None
+
+
+def test_build_infer_code_params_voice_clone_args(monkeypatch):
+    """spk_smp / txt_smp 有值时透传。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeInferCodeParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatInferCodeParams", _FakeInferCodeParams, raising=False)
+
+    params = TtsParams(
+        seed=1, speaker="x",
+        spk_smp="REF_B64", txt_smp="参考文本",
+    )
+    chat_tts._build_infer_code_params(params)
+    assert captured["spk_smp"] == "REF_B64"
+    assert captured["txt_smp"] == "参考文本"
+
+
+# === Phase 2.3: _build_refine_text_params ===
+
+def test_build_refine_text_params_free_text_overrides_ints(monkeypatch):
+    """refiner_text 非空时优先用自由文本（忽略 oral/laugh/break_）。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeRefineTextParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatRefineTextParams", _FakeRefineTextParams, raising=False)
+
+    params = TtsParams(
+        seed=1, speaker="x",
+        refiner_text="[oral_5][laugh_2]",
+        oral=9, laugh=9, break_=9,  # 即使有 3 整数也被忽略
+    )
+    chat_tts._build_refine_text_params(params)
+    assert captured["prompt"] == "[oral_5][laugh_2]"
+
+
+def test_build_refine_text_params_three_ints_combined(monkeypatch):
+    """3 整数非零时拼 [oral_X][laugh_X][break_X]。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeRefineTextParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatRefineTextParams", _FakeRefineTextParams, raising=False)
+
+    params = TtsParams(seed=1, speaker="x", oral=3, laugh=2, break_=7)
+    chat_tts._build_refine_text_params(params)
+    assert captured["prompt"] == "[oral_3][laugh_2][break_7]"
+
+
+def test_build_refine_text_params_all_zero_returns_none(monkeypatch):
+    """refiner_text 空 + 3 整数都=0 → 返回 None（不精炼）。"""
+    from app.core import chat_tts
+    class _FakeRefineTextParams:
+        def __init__(self, **kw):
+            pass
+    monkeypatch.setattr(chat_tts, "_ChatRefineTextParams", _FakeRefineTextParams, raising=False)
+
+    params = TtsParams(seed=1, speaker="x")
+    assert chat_tts._build_refine_text_params(params) is None
+
+
+def test_build_refine_text_params_partial_ints(monkeypatch):
+    """3 整数部分非零时只拼非零部分。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeRefineTextParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatRefineTextParams", _FakeRefineTextParams, raising=False)
+
+    params = TtsParams(seed=1, speaker="x", oral=2, laugh=0, break_=5)
+    chat_tts._build_refine_text_params(params)
+    assert captured["prompt"] == "[oral_2][break_5]"
+
+
+def test_build_refine_text_params_includes_tuning(monkeypatch):
+    """RefineTextParams 应补 top_P/top_K/temperature。"""
+    from app.core import chat_tts
+    captured = {}
+    class _FakeRefineTextParams:
+        def __init__(self, **kw):
+            captured.update(kw)
+    monkeypatch.setattr(chat_tts, "_ChatRefineTextParams", _FakeRefineTextParams, raising=False)
+
+    params = TtsParams(seed=1, speaker="x", temperature=0.5, top_p=0.9, top_k=30, oral=2)
+    chat_tts._build_refine_text_params(params)
+    assert captured["top_P"] == 0.9
+    assert captured["top_K"] == 30
+    assert captured["temperature"] == 0.5
+    assert captured["prompt"] == "[oral_2]"
+
+
+# === Phase 2.4: 两步范式 _refine_text + _synthesize_audio ===
+
+def test_refine_text_returns_text_when_model_not_loaded(monkeypatch):
+    """模型未加载时 _refine_text 直接返回原 text。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    params = TtsParams(seed=1, speaker="x", oral=2)
+    out = chat_tts._refine_text(params, "你好世界")
+    assert out == "你好世界"
+
+
+def test_synthesize_audio_returns_silence_when_model_not_loaded(monkeypatch):
+    """模型未加载时 _synthesize_audio 返回静音。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    params = TtsParams(seed=1, speaker="x")
+    audio, segments = chat_tts._synthesize_audio(params, "hi")
+    assert isinstance(audio, np.ndarray)
+    assert audio.dtype == np.float32
+    assert len(audio) == 24000  # 1 秒静音
+
+
+def test_infer_audio_skip_refine_skips_refine(monkeypatch):
+    """skip_refine_text=True 时，_infer_audio 不调 _refine_text。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    refine_called = []
+    synth_called = []
+
+    def fake_refine(params, text):
+        refine_called.append(text)
+        return "REFINED"
+
+    def fake_synth(params, text):
+        synth_called.append(text)
+        return np.zeros(24000, dtype=np.float32), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_refine_text", fake_refine)
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    params = TtsParams(seed=1, speaker="x", skip_refine_text=True)
+    chat_tts._infer_audio(params, "hi")
+    assert refine_called == []  # 不调
+    assert synth_called == ["hi"]  # 直接 synthesize
+
+
+def test_infer_audio_two_step_calls_refine_then_synth(monkeypatch):
+    """正常两步：_refine_text 先调 → _synthesize_audio 用 refined_text。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    call_order = []
+
+    def fake_refine(params, text):
+        call_order.append(("refine", text))
+        return text + "-REFINED"
+
+    def fake_synth(params, text):
+        call_order.append(("synth", text))
+        return np.zeros(24000, dtype=np.float32), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_refine_text", fake_refine)
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    params = TtsParams(seed=1, speaker="x", oral=2)  # skip_refine_text=False
+    chat_tts._infer_audio(params, "hi")
+    assert call_order == [("refine", "hi"), ("synth", "hi-REFINED")]
+
+
+def test_refine_text_protects_tokens(monkeypatch):
+    """_refine_text 调真实模型时，应先 replace_tokens 保护 control token。"""
+    from app.core import chat_tts
+    chat_tts._MODEL = None
+    # 模拟有模型，但只检查 refine_text 收到的 text
+    refine_received = []
+
+    class _FakeModel:
+        def has_loaded(self): return True
+        def refine_text(self, text, params):
+            refine_received.append(text)
+            return text
+
+    chat_tts._MODEL = _FakeModel()
+    monkeypatch.setattr(chat_tts, "_build_refine_text_params",
+                        lambda p: object())  # 非 None 走精炼
+
+    params = TtsParams(seed=1, speaker="x", oral=2, laugh=1)
+    chat_tts._refine_text(params, "你好[oral_2]世界[laugh_1]")
+    # 收到的应该是替换后的文本（无 [oral_2] / [laugh_1]）
+    assert "[oral_2]" not in refine_received[0]
+    assert "[laugh_1]" not in refine_received[0]
+    assert "你好" in refine_received[0]
+    assert "世界" in refine_received[0]
