@@ -453,16 +453,30 @@ def synthesize_to_wav_bytes(
         on_progress(0.6)  # 推理完成；增强从 0.6 → 1.0
 
     # Phase 2.6: 增强 / 降噪
+    # ⚠️ Phase 6.x 兼容性告警：resemble-enhance==0.0.1 在 scipy>=1.10 / torch>=2.10
+    #   上有 arange dtype / fsolve 等源码层 bug（见 requirements.txt 注释）。
+    #   在现代环境上仍会抛 TypeError。我们提前 catch + 抛语义化异常，让 worker
+    #   把 job 标 failed 时 error 字段是「音频增强功能暂不可用」而不是 stack trace。
     sample_rate = 24000
     if params.enhance_audio or params.denoise_audio:
-        audio, sample_rate = run_enhance(
-            audio, sr=sample_rate,
-            denoise=params.denoise_audio,
-            enhance=params.enhance_audio,
-            solver=params.solver,
-            nfe=params.nfe,
-            tau=params.tau,
-        )
+        try:
+            audio, sample_rate = run_enhance(
+                audio, sr=sample_rate,
+                denoise=params.denoise_audio,
+                enhance=params.enhance_audio,
+                solver=params.solver,
+                nfe=params.nfe,
+                tau=params.tau,
+            )
+        except (TypeError, ValueError) as e:
+            msg = str(e)
+            if "arange" in msg or "fsolve" in msg or "0-dimensional" in msg:
+                raise RuntimeError(
+                    "音频增强功能在当前环境不可用：resemble-enhance 0.0.1 与 "
+                    "scipy>=1.10 / torch>=2.10 不兼容（arange dtype / fsolve 报错）。"
+                    "请关闭 enhance_audio / denoise_audio 后重试。"
+                ) from e
+            raise
 
     if on_progress:
         on_progress(0.95)

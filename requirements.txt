@@ -6,18 +6,31 @@ torch>=2.0
 torchaudio>=2.0
 numpy
 requests>=2.31
+tabulate>=0.9     # resemble-enhance 间接依赖
 
-# Phase 2.6: 音频增强 / 降噪
-# ⚠️ 风险：resemble-enhance==0.0.1 硬 pin torch==2.1.1/torchaudio==2.1.1（仅 cp311 ABI），
-#    在 Python 3.12 + macOS 环境下用 `uv add` / `pip install` 都会因 ABI 不匹配失败。
-#    正确装法（绕过它自带的硬 pin）：
-#      1) `pip install resemble-enhance --no-deps`         # 不让它拉 torch==2.1.1
-#      2) `pip install omegaconf pytorch-lightning soundfile librosa pandas matplotlib`  # 缺啥补啥
-#      3) macOS 通常装不上 deepspeed，跳过即可（Linux 才有意义）
-#    或更稳：直接 `pip install resemble-enhance==0.0.1 --no-deps`，再 `pip install --upgrade torch torchaudio` 兜底。
-#    ⚠️ 因此本文件**故意不列 resemble-enhance**，避免 `uv add -r` 误解析导致 abort。
-#    详见 docs/superpowers/plans/2026-06-12-chatts-enhanced-port.md 风险节 #9。
-# resemble-enhance>=0.0.1    # ← 注释掉，由上面步骤手动装
+# Phase 2.6: 音频增强 / 降噪（**可选 / 兼容性受限**）
+# ⚠️ resemble-enhance==0.0.1 在现代环境上有两层 ABI/源码兼容性陷阱：
+#
+# 1) PyTorch ABI 硬 pin：resemble-enhance 的 metadata 硬要求 torch==2.1.1/torchaudio==2.1.1
+#    且仅 cp311 wheel。Python 3.12 + macOS 下 `uv add` / `pip install` 会因 ABI 冲突失败。
+#    → 正确装法（绕过硬 pin）：`pip install resemble-enhance --no-deps` 然后手动补：
+#         pip install omegaconf pytorch-lightning soundfile librosa pandas matplotlib
+#      macOS 通常装不上 deepspeed，跳过即可（Linux 才有意义）。
+#
+# 2) 源码层 broken on scipy>=1.10 / torch>=2.10：即便装上了，
+#    实际跑 enhance_audio=True 时会在两处炸：
+#      a) `torch.arange(start, end, dtype=idx_dtype, device=device)` —— 0.0.1 的
+#         _get_sinc_resample_kernel 把 numpy.dtype 当 torch.dtype 传，torch 2.10+ 严格校验报错；
+#      b) `scipy.optimize.fsolve(lambda a: ...)` —— 0.0.1 在 lambda 返回 numpy 数组时
+#         scipy 1.10+ 抛 "only 0-dimensional arrays can be converted"。
+#    解决：要么降级到 torch==2.1.1 + scipy<1.10（极不推荐，拖慢整个项目），
+#    要么用 `--no-deps` 装完后本文件**不**在主流程依赖，**仅当用户显式需要**时再装。
+#
+# 因此本文件**故意不列 resemble-enhance**，避免 `uv add -r` 误解析 + 主路径依赖。
+# 模型权重若已从 ModelScope 镜像拉到 site-packages/resemble_enhance/model_repo，
+# 第一次跑 enhance_audio=True 时仍会因上面 (2) 的源码问题失败 —— **本期先禁用**。
+# 详见 docs/superpowers/plans/2026-06-12-chatts-enhanced-port.md 风险节 #9。
+# resemble-enhance>=0.0.1    # ← 注释掉，由上面步骤手动装（**且会与 torch 2.12+ 冲突**）
 
 # dev / test
 pytest>=8.0
