@@ -42,6 +42,9 @@ class TtsParams(BaseModel):
     top_p: float = 0.7
     top_k: int = 20
     speaker: str
+    # Phase 4.2：音色库 FK 引用。提交合成时若此字段非空，
+    # synthesize 路由层会从 speakers 库读出 tensor_base64 覆盖上面的 `speaker` 字符串。
+    speaker_id: int | None = None
     refiner_text: str | None = None
     repetition_penalty: float = 1.05
     speed: int = 5
@@ -104,12 +107,19 @@ DEFAULT_DEMO_TEXT = "你好，这是一段声音测试。"
 # === 生成 ===
 
 class DrawRequest(BaseModel):
-    """生成请求。seed/speaker 缺省时后端随机；其余字段缺省用默认值。"""
+    """生成请求。seed/speaker 缺省时后端随机；其余字段缺省用默认值。
+
+    Phase 4.1: 新增 `speaker_id`（音色库 FK，可选），用于绑定已命名音色到本卡。
+    若提供：后端会按 id 读出 speaker 的 `tensor_base64` 喂给推理，同时把
+    `speaker_id` 写入 `cards.speaker_id`（**双轨引用**：字符串快照 `params.speaker`
+    + FK `speaker_id`），删除音色时 FK 自动 SET NULL 而字符串快照保留。
+    """
     seed: int | None = None          # None → 随机
     temperature: float = 0.3
     top_p: float = 0.7
     top_k: int = 20
     speaker: str | None = None       # None → 随机
+    speaker_id: int | None = None    # Phase 4.1: 音色库 FK 优先于 speaker
     refiner_text: str | None = None
     demo_text: str = DEFAULT_DEMO_TEXT  # 试听文本
     repetition_penalty: float = 1.05
@@ -196,6 +206,9 @@ class CardListItem(BaseModel):
     is_favorited: bool
     demo_text: str
     params: TtsParams
+    # Phase 4.3：音色库引用 FK（可空）。删除音色库项时被应用层 SET NULL，
+    # 字符串快照（`params.speaker`）仍保留。
+    speaker_id: int | None = None
     created_at: str
     updated_at: str
 

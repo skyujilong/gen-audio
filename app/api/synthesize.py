@@ -13,9 +13,12 @@ from ..core.params import (
     Job,
     JobStatus,
     SynthesizeRequest,
+    TtsParams,
 )
 from ..core.queue import submit_job
 from ..db import queries
+# Phase 4.2：speaker_id 解析失败时复用 speakers 路由的 404 错误码
+from .speakers import SpeakerNotFoundError
 
 
 router = APIRouter(prefix="/api", tags=["synthesize"])
@@ -44,18 +47,36 @@ def _row_to_job(row: dict) -> Job:
     )
 
 
+def _resolve_speaker_id(params: TtsParams) -> TtsParams:
+    """Phase 4.2：若 `params.speaker_id` 存在，从 speakers 库读出 tensor_base64 覆盖 `params.speaker`。
+
+    优先级：`params.speaker_id` > `params.speaker`。
+    若 `speaker_id` 不存在 → 抛 SpeakerNotFoundError。
+    若 `speaker_id` 为 None → 透传 params（保持老行为）。
+    """
+    if params.speaker_id is None:
+        return params
+    spk_row = queries.get_speaker(config.DB_PATH, params.speaker_id)
+    if spk_row is None:
+        raise SpeakerNotFoundError(f"音色 {params.speaker_id} 不存在")
+    return params.model_copy(update={"speaker": spk_row["tensor_base64"]})
+
+
 @router.post("/synthesize", response_model=Job)
 def synthesize_one(req: SynthesizeRequest) -> Job:
     """提交单条合成任务到队列，立即返回 `Job`（pending 状态）。
 
     Raises:
         CardNotFoundError: card_id 不存在。
+        SpeakerNotFoundError: params.speaker_id 不存在（Phase 4.2）。
     """
     row = queries.get_card(config.DB_PATH, req.card_id)
     if row is None:
         raise CardNotFoundError(f"参数卡 {req.card_id} 不存在")
 
-    job_id = submit_job(config.DB_PATH, card_id=req.card_id, params=req.params, text=req.text)
+    # Phase 4.2：speaker_id 解析后作为字符串快照塞进任务 params
+    resolved_params = _resolve_speaker_id(req.params)
+    job_id = submit_job(config.DB_PATH, card_id=req.card_id, params=resolved_params, text=req.text)
     job_row = queries.get_job(config.DB_PATH, job_id)
     return _row_to_job(job_row)
 
@@ -66,13 +87,16 @@ def synthesize_batch(req: BatchSynthesizeRequest) -> list[Job]:
 
     Raises:
         CardNotFoundError: 任一 item.card_id 不存在（**立即**失败，不提交已遍历的部分）。
+        SpeakerNotFoundError: 任一 item.params.speaker_id 不存在（Phase 4.2）。
     """
     jobs_out: list[Job] = []
     for item in req.items:
         row = queries.get_card(config.DB_PATH, item.card_id)
         if row is None:
             raise CardNotFoundError(f"参数卡 {item.card_id} 不存在")
-        job_id = submit_job(config.DB_PATH, card_id=item.card_id, params=item.params, text=item.text)
+        # Phase 4.2: 同上，逐项解析
+        resolved_params = _resolve_speaker_id(item.params)
+        job_id = submit_job(config.DB_PATH, card_id=item.card_id, params=resolved_params, text=item.text)
         job_row = queries.get_job(config.DB_PATH, job_id)
         jobs_out.append(_row_to_job(job_row))
     return jobs_out

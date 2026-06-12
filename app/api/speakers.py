@@ -132,6 +132,15 @@ def random_speaker() -> dict:
     Returns:
         `{speaker_id: null, tensor_base64: "..."}`
     """
+    return random_speaker_payload()
+
+
+def random_speaker_payload() -> dict:
+    """共用实现：被 /api/speakers/random 和 /api/draw/random_speaker 两个路由复用。
+
+    Phase 4.1：让老 `/api/draw/random_speaker` 复用同一份逻辑（同一份 tensor、
+    同一份 `speaker_id=null` 形状），避免实现分叉。
+    """
     return {
         "speaker_id": None,
         "tensor_base64": _random_speaker(),

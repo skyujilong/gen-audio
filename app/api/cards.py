@@ -22,6 +22,8 @@ def _row_to_list_item(row: dict) -> CardListItem:
     """DB row dict → CardListItem Pydantic 模型。
 
     `row["params"]` 是 JSON 字符串（queries 层不预解析），需要先 `json.loads`。
+    `row["speaker_id"]` 在 cards 表里是可空 FK；老库若没这列会抛 KeyError，
+    用 .get 兜底（Phase 4.3：迁移路径上不强制要求这列存在）。
     """
     params_raw = row["params"]
     if isinstance(params_raw, str):
@@ -32,6 +34,7 @@ def _row_to_list_item(row: dict) -> CardListItem:
         is_favorited=row["is_favorited"],
         demo_text=row["demo_text"],
         params=TtsParams.model_validate(params_raw),
+        speaker_id=row.get("speaker_id"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

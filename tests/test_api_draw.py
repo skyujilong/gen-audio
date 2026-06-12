@@ -209,15 +209,24 @@ def test_draw_with_custom_demo_text(tmp_path, monkeypatch):
 
 
 def test_random_speaker_endpoint(tmp_path, monkeypatch):
-    """GET /api/draw/random_speaker 返回 speaker 字段。"""
+    """GET /api/draw/random_speaker 返回与 /api/speakers/random 同一份 payload。
+
+    Phase 4.1: 形状从 `{speaker: ...}` 升级为 `{speaker_id: null, tensor_base64: ...}`。
+    实现复用 speakers 路由的 `random_speaker_payload`。
+    """
     config.DATA_ROOT = tmp_path / "data"
     config.DB_PATH = config.DATA_ROOT / "gen-audio.db"
     init_schema(config.DB_PATH)
 
-    chat_tts._MODEL = None
-    monkeypatch.setattr("app.core.chat_tts._random_speaker", lambda: "FAKE_SPEAKER_EMBEDDING")
+    # 注意：draw.py 通过 `from .speakers import random_speaker_payload` 拉了函数，
+    # 而 random_speaker_payload 内部又使用 `app.api.speakers._random_speaker`；
+    # 所以 patch 目标应为 `app.api.speakers._random_speaker`。
+    import app.api.speakers as speakers_mod
+    monkeypatch.setattr(speakers_mod, "_random_speaker", lambda: "FAKE_SPEAKER_EMBEDDING")
 
     client = TestClient(app)
     res = client.get("/api/draw/random_speaker")
     assert res.status_code == 200
-    assert res.json()["speaker"] == "FAKE_SPEAKER_EMBEDDING"
+    body = res.json()
+    assert body["speaker_id"] is None
+    assert body["tensor_base64"] == "FAKE_SPEAKER_EMBEDDING"
