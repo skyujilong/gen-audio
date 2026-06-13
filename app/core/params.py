@@ -241,6 +241,9 @@ class HealthResponse(BaseModel):
     status: str              # "ok" | "loading" | "error"
     model_loaded: bool
     queue_size: int          # 当前内存中 pending + running 数
+    tn_status: str = "disabled"
+    """TN（WeTextProcessing 文本规范化）状态：'loading' | 'ok' | 'error' | 'disabled'。
+    'disabled' = 用户关闭或包未装；'error' = 加载失败但合成仍可用（自动 fallback 到原文）。"""
 
 
 # === 任务状态机 ===
