@@ -71,3 +71,15 @@ TEXT_CHUNK_COLLAPSE_RATIO = float(os.getenv("TEXT_CHUNK_COLLAPSE_RATIO", "0.05")
 # --- 段数上限保护 ---
 TEXT_CHUNK_MAX_SEGMENTS = int(os.getenv("TEXT_CHUNK_MAX_SEGMENTS", "50"))
 """单 job 最大段数。防超长文本独占 worker。切完超过此值 → 抛 ValueError。"""
+
+# --- 首段参考音频（Phase 8：跨段音色一致性，spk_smp 二段法）---
+TEXT_CHUNK_USE_FIRST_AS_REF = (
+    os.getenv("TEXT_CHUNK_USE_FIRST_AS_REF", "true").lower() == "true"
+)
+"""是否启用「首段做参考音频」二段法。多段任务（chunks > 1）且用户没传
+`params.spk_smp` 时生效：第一个长度达标段合成完后用 `sample_audio_speaker`
+编码为 spk_smp，后续段全注入。单段任务零开销；用户传 spk_smp 时让位。"""
+
+TEXT_CHUNK_REF_MIN_CHARS = int(os.getenv("TEXT_CHUNK_REF_MIN_CHARS", "8"))
+"""最短参考段字数。短于此值的段不当参考，跳到下一段；防止 1-2 字的极短句
+编码出来的 spk_smp 信息量不足以稳定后续段。"""
