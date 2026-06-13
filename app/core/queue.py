@@ -99,11 +99,12 @@ async def synthesize_with_progress(
     from ..db.queries import get_card
 
     # 真实场景下应：调 ChatTTS → 拿到音频字节 + 字幕段
-    # 这里为简化：把音频字节和字幕直接落盘
+    # Phase 7 起 segments 是 [(chunk_text, start, end), ...]（每段一行 SRT），
+    # 直接喂给 build_srt 即可。空（如纯标点输入）时 SRT 为空字符串。
     audio_bytes, segments = synthesize_to_wav_bytes(
         params=params, text=text, on_progress=on_progress,
     )
-    srt = build_srt([(text, segments[0][0], segments[0][1])]) if segments else ""
+    srt = build_srt(segments) if segments else ""
 
     # 写文件（用 data_root = db_path 父目录的 data/）
     data_root = _db_path.parent if _db_path else Path("data")

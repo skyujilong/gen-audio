@@ -42,7 +42,11 @@ def test_draw_one_returns_valid_params(monkeypatch):
 
 
 def test_synthesize_to_wav_bytes_returns_wav_bytes(monkeypatch):
-    """mock 真正的 ChatTTS 推理，验证接口形状。"""
+    """mock 真正的 ChatTTS 推理，验证接口形状。
+
+    Phase 7 起 segments 的元素从 `(start, end)` 改成 `(chunk_text, start, end)`，
+    可直接喂给 `subtitle.build_srt`。
+    """
     from app.core import chat_tts
     chat_tts._MODEL = None
 
@@ -57,7 +61,8 @@ def test_synthesize_to_wav_bytes_returns_wav_bytes(monkeypatch):
 
     assert isinstance(wav_bytes, bytes)
     assert wav_bytes[:4] == b"RIFF"  # WAV 文件头
-    assert segments == [(0.0, 1.0)]
+    # 新 segments 格式：[(text, start, end)]
+    assert segments == [("hi", 0.0, 1.0)]
 
 
 def test_synthesize_invokes_progress_callback(monkeypatch):
