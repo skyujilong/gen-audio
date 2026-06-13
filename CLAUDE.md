@@ -74,6 +74,7 @@ pytest tests/ -k "speaker"                        # 按关键字
 - **测试 mock 提示**：`speakers.py` 用 `from ..core.chat_tts import _random_speaker` 把名字绑到 speakers 模块；测试要 patch `app.api.speakers._random_speaker` 而不是 `chat_tts._random_speaker`。
 - **vendor 更新流程**：要刷新 `app/core/vendor/resemble_enhance/` 时按 `vendor/NOTICE.md` 末尾 rsync 步骤同步上游 + 重新应用 3 处 `[VENDOR-FIX]` 标记。`.gitignore` 已排除 `model_repo/` 防权重误 commit。
 - **长文本切分流水线**（Phase 7）：`synthesize_to_wav_bytes` 不是单次 infer，而是一条流水线 ——`text_norm.normalize_text` → `text_chunker.split_text` →（每段独立 `_infer_audio` + 重试 + 塌缩检测）→ `audio_concat.concat_with_pauses`（段间 0.12s 静音）。**对外仍然 1 条 `synthesize_jobs` = 1 个 task**，chunks 只活在 worker 内部。强制 `_MODEL.infer(split_text=False)` 防双层切分把字幕错乱；强制 `skip_refine_text=True` + 忽略 `refiner_text`（refine 易音色漂移）。任意段重试耗尽 → 抛 `ChunkSynthesisError(第 i/n 段...)` → worker 标 FAILED 写到 DB error，不静音兜底。所有阈值通过 `app/config.py` 的 `TEXT_CHUNK_*` / `TEXT_NORM_*` 调（消费方必须 `from .. import config; config.TEXT_CHUNK_SOFT_MAX`，路径绑定坑同样适用）。`segments` 现在是 `[(chunk_text, start, end), ...]` 直接喂给 `subtitle.build_srt`。详见 `docs/superpowers/plans/2026-06-13-long-text-chunking.md`。
+- **首段参考音频**（Phase 8，spk_smp 二段法）：多段任务时把第一个达标段（≥ `TEXT_CHUNK_REF_MIN_CHARS` 字）的 wav 用 `_MODEL.sample_audio_speaker(wav)` 编码成 `spk_smp` 注入后续段，强化跨段音色一致性。开关 `TEXT_CHUNK_USE_FIRST_AS_REF` 默认 true；用户已传 `params.spk_smp` 时自动让位；编码失败（WARNING + 后续段裸跑）/ 单段任务零开销。每段额外 +10–15% 推理开销，关闭开关可立即回退到 Phase 7 行为。详见 `docs/superpowers/plans/2026-06-13-spk-smp-cross-chunk-consistency.md`。
 - **TN 是优化项不是必需项**：`text_norm` 顶部 try-import `WeTextProcessing`，未装时 `is_loaded()` 永远 False，`normalize_text` return 原文不抛。lifespan 用 `asyncio.create_task` 后台跑 `text_norm.load_normalizer`（FST 编译 5–30s），与 ChatTTS 模型加载并行。`/api/health` 暴露 `tn_status: loading|ok|error|disabled`。
 
 ### 前端（`static/`）
@@ -90,3 +91,4 @@ pytest tests/ -k "speaker"                        # 按关键字
 - 实现计划：`docs/superpowers/plans/2026-06-11-gen-audio.md`
 - ChatTTS-Enhanced 移植计划（已全部 merge）：`docs/superpowers/plans/2026-06-12-chatts-enhanced-port.md`
 - 长文本切分流水线（Phase 7）：`docs/superpowers/plans/2026-06-13-long-text-chunking.md`
+- 首段参考音频 / spk_smp 二段法（Phase 8）：`docs/superpowers/plans/2026-06-13-spk-smp-cross-chunk-consistency.md`（执行计划：`docs/superpowers/plans/2026-06-13-spk-smp-execution.md`）

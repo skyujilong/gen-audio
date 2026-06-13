@@ -490,3 +490,10 @@ srt = build_srt(segments) if segments else ""  # segments 现在是 [(text, star
 8. 端到端验证 + 回归
 
 每步独立 commit，便于回滚。
+
+
+---
+
+## 后续增量
+
+- [Phase 8：首段参考音频（spk_smp 二段法）—— 强化跨段音色一致性](./2026-06-13-spk-smp-cross-chunk-consistency.md)

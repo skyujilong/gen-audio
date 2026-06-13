@@ -42,12 +42,24 @@ class _FakeModel:
         self.has_loaded_value = True
         self.infer_calls: list[dict] = []  # 记录每次 _MODEL.infer 调用的 kwargs
         self._random_spk_returns = "FAKE_SAMPLED_SPEAKER"
+        # Phase 8: spk_smp 二段法相关
+        self.sample_audio_calls: list[np.ndarray] = []
+        self.sample_audio_returns = "REF_SMP_FAKE"  # str 或 callable(wav)->str
+        self.sample_audio_raises: Exception | None = None
 
     def has_loaded(self) -> bool:
         return self.has_loaded_value
 
     def sample_random_speaker(self) -> str:
         return self._random_spk_returns
+
+    def sample_audio_speaker(self, wav):
+        self.sample_audio_calls.append(wav)
+        if self.sample_audio_raises is not None:
+            raise self.sample_audio_raises
+        if callable(self.sample_audio_returns):
+            return self.sample_audio_returns(wav)
+        return self.sample_audio_returns
 
     def infer(self, text, **kwargs):
         # 默认返回 1s 单声道有声 wav（防塌缩）
@@ -505,3 +517,206 @@ def test_tn_runs_before_chunking(fake_model, monkeypatch):
     # 数字应已被规范化
     assert any("一九九八" in c for c in seen_chunks)
     assert not any("1998" in c for c in seen_chunks)
+
+
+# === 12. Phase 8: spk_smp 二段法（首段做参考音频）===
+
+def test_first_chunk_used_as_ref(fake_model, monkeypatch):
+    """首段达标 → 后续段 params.spk_smp = sample_audio_speaker(wav_0)，
+    txt_smp = chunks[0]。第 1 段裸跑（spk_smp 仍 None）。
+    """
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    fake_model.sample_audio_returns = "REF_FROM_FIRST"
+
+    seen: list[tuple[str | None, str | None, str]] = []  # (spk_smp, txt_smp, chunk)
+
+    def fake_synth(params, text):
+        seen.append((params.spk_smp, params.txt_smp, text))
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    synthesize_to_wav_bytes(
+        TtsParams(seed=1, speaker="X"),
+        "第一段长一点。第二段。第三段。",
+    )
+
+    # 第 1 段裸跑（spk_smp 仍未设置）
+    assert seen[0][0] is None or seen[0][0] == ""
+    assert seen[0][1] is None or seen[0][1] == ""
+    # 第 2、3 段被注入
+    assert seen[1][0] == "REF_FROM_FIRST"
+    assert seen[1][1] == seen[0][2]  # txt_smp = chunks[0] 的实际文本
+    assert seen[2][0] == "REF_FROM_FIRST"
+    assert seen[2][1] == seen[0][2]
+
+    # sample_audio_speaker 只调一次
+    assert len(fake_model.sample_audio_calls) == 1
+
+
+def test_short_first_chunk_uses_first_qualifying(fake_model, monkeypatch):
+    """chunks[0] < min_chars → 用第一个达标段做参考；之前裸跑，之后才注入。"""
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    # 把门槛拉高到 8，让短首段不达标
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 8)
+
+    fake_model.sample_audio_returns = "REF_FROM_QUALIFYING"
+
+    seen: list[tuple[str | None, str]] = []
+
+    def fake_synth(params, text):
+        seen.append((params.spk_smp, text))
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    # 首段 "你好世界呀。"（6 字，> TEXT_CHUNK_MIN_CHARS=4 不合并；< ref MIN_CHARS=8 不达标）
+    # 第二段长 → 拿来当参考；第三段被注入
+    synthesize_to_wav_bytes(
+        TtsParams(seed=1, speaker="X"),
+        "你好世界呀。今天天气真的非常好阳光温暖。下午一起去散步吧。",
+    )
+
+    # 应该 3 段
+    assert len(seen) == 3, [s[1] for s in seen]
+    # 第一段裸跑（< 8 不达标）
+    assert seen[0][0] is None or seen[0][0] == ""
+    assert len(seen[0][1]) < 8
+    # 第二段也裸跑（在它合成"之后"才提取）
+    assert seen[1][0] is None or seen[1][0] == ""
+    assert len(seen[1][1]) >= 8
+    # 但因为它达标 → 提取 ref；第三段开始注入
+    assert seen[2][0] == "REF_FROM_QUALIFYING"
+    # sample_audio_speaker 1 次（在第二段后）
+    assert len(fake_model.sample_audio_calls) == 1
+
+
+def test_user_spk_smp_takes_precedence(fake_model, monkeypatch):
+    """params.spk_smp 已传 → sample_audio_speaker 0 次调用，全程沿用用户值。"""
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    seen: list[str | None] = []
+
+    def fake_synth(params, text):
+        seen.append(params.spk_smp)
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    synthesize_to_wav_bytes(
+        TtsParams(seed=1, speaker="X", spk_smp="USER_PROVIDED", txt_smp="用户参考"),
+        "第一段长一点。第二段。第三段。",
+    )
+
+    # 全段都用用户传的值；sample_audio_speaker 0 次
+    assert all(s == "USER_PROVIDED" for s in seen)
+    assert len(fake_model.sample_audio_calls) == 0
+
+
+def test_disable_ref_via_config(fake_model, monkeypatch):
+    """TEXT_CHUNK_USE_FIRST_AS_REF=False → 全段裸跑，sample_audio_speaker 0 次。"""
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", False)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    seen: list[str | None] = []
+
+    def fake_synth(params, text):
+        seen.append(params.spk_smp)
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    synthesize_to_wav_bytes(
+        TtsParams(seed=1, speaker="X"),
+        "第一段长一点。第二段。第三段。",
+    )
+
+    # 全裸跑
+    assert all(s is None or s == "" for s in seen)
+    assert len(fake_model.sample_audio_calls) == 0
+
+
+def test_sample_audio_speaker_failure_fallback(fake_model, monkeypatch, caplog):
+    """sample_audio_speaker 抛异常 → WARNING + 后续段裸跑 + 整 job 仍成功。"""
+    import logging
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    fake_model.sample_audio_raises = RuntimeError("encoding failed")
+
+    seen: list[str | None] = []
+
+    def fake_synth(params, text):
+        seen.append(params.spk_smp)
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    with caplog.at_level(logging.WARNING, logger="app.core.chat_tts"):
+        wav_bytes, segments = synthesize_to_wav_bytes(
+            TtsParams(seed=1, speaker="X"),
+            "第一段长一点。第二段。第三段。",
+        )
+
+    # 后续段也裸跑（fallback），整 job 仍成功
+    assert all(s is None or s == "" for s in seen)
+    assert wav_bytes[:4] == b"RIFF"
+    assert len(segments) == 3
+    # WARNING 信息出现
+    assert any("sample_audio_speaker failed" in r.message for r in caplog.records)
+    # 仅尝试编码 1 次（之后 ref_pending 关闭）
+    assert len(fake_model.sample_audio_calls) == 1
+
+
+def test_single_chunk_no_ref(fake_model, monkeypatch):
+    """单段任务 → sample_audio_speaker 0 次调用（不进 ref 分支）。"""
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    seen: list[str | None] = []
+
+    def fake_synth(params, text):
+        seen.append(params.spk_smp)
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    synthesize_to_wav_bytes(
+        TtsParams(seed=1, speaker="X"),
+        "只有一段话。",
+    )
+
+    assert len(seen) == 1
+    assert seen[0] is None or seen[0] == ""
+    assert len(fake_model.sample_audio_calls) == 0
+
+
+def test_txt_smp_uses_chunked_text_not_raw(fake_model, monkeypatch):
+    """txt_smp 必须是切分后的实际 chunk[0] 文本，不是用户原文（覆盖 normalize 后）。"""
+    monkeypatch.setattr(config, "TEXT_CHUNK_USE_FIRST_AS_REF", True)
+    monkeypatch.setattr(config, "TEXT_CHUNK_REF_MIN_CHARS", 4)
+
+    fake_model.sample_audio_returns = "REF_OK"
+
+    seen: list[tuple[str | None, str]] = []
+
+    def fake_synth(params, text):
+        seen.append((params.txt_smp, text))
+        return _good_audio(), [(0.0, 1.0)]
+
+    monkeypatch.setattr(chat_tts, "_synthesize_audio", fake_synth)
+
+    raw = "第一段长一点。第二段。第三段。"
+    synthesize_to_wav_bytes(TtsParams(seed=1, speaker="X"), raw)
+
+    # 第 1 段裸跑
+    first_chunk_text = seen[0][1]
+    # 第 2、3 段的 txt_smp 应等于第 1 段的实际 chunk 文本（不是整段 raw）
+    assert seen[1][0] == first_chunk_text
+    assert seen[2][0] == first_chunk_text
+    # 而 first_chunk_text 显然不等于完整原文
+    assert first_chunk_text != raw
+    assert len(first_chunk_text) < len(raw)
