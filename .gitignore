@@ -1,4 +1,4 @@
-# 运行时数据
+# 运行时数据（含 SQLite DB / 音频产出 / speakers / wetext_cache 等）
 data/*
 !data/.gitkeep
 
