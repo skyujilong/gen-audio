@@ -13,6 +13,14 @@ echo "==================================="
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 加载本地环境变量（如存在）。set -a 让 KEY=VALUE 自动 export 给 uvicorn/Python。
+if [ -f ".env.local" ]; then
+    echo "[INFO] 加载 .env.local 环境变量..."
+    set -a
+    source .env.local
+    set +a
+fi
+
 # 检查 uv
 if command -v uv &>/dev/null; then
     UV="uv"

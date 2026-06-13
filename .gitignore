@@ -20,6 +20,10 @@ __pycache__/
 .venv/
 venv/
 
+# 本地环境变量
+.env
+.env.local
+
 # ChatTTS 模型文件（首次加载自动下载，约 500MB+）
 asset/
 
