@@ -573,11 +573,27 @@ def synthesize_to_wav_bytes(
         )
 
     # === Step 4：串行合成每段，带重试 + 塌缩检测 ===
+    # Step 4-pre: 决策是否启用首段参考机制（Phase 8 spk_smp 二段法）
+    # 多段任务 + 配置开 + 用户没传 spk_smp → 用首个达标段做参考
+    use_ref = (
+        len(chunks) > 1
+        and config.TEXT_CHUNK_USE_FIRST_AS_REF
+        and not (params.spk_smp or "").strip()
+    )
+    ref_smp: str | None = None
+    ref_txt: str | None = None
+    ref_pending = use_ref
+
     audios: list[np.ndarray] = []
     n = len(chunks)
     for i, chunk_text in enumerate(chunks):
+        # ref_smp 已就绪 → 后续段全部注入；否则用裸 params
+        chunk_params = (
+            params if ref_smp is None
+            else params.model_copy(update={"spk_smp": ref_smp, "txt_smp": ref_txt})
+        )
         wav = _synthesize_one_chunk(
-            params=params,
+            params=chunk_params,
             chunk_text=chunk_text,
             max_retries=config.TEXT_CHUNK_MAX_RETRIES,
             collapse_ratio=config.TEXT_CHUNK_COLLAPSE_RATIO,
@@ -585,6 +601,26 @@ def synthesize_to_wav_bytes(
             total_chunks=n,
         )
         audios.append(wav)
+
+        # 在第一个长度达标段之后提取参考样本（编码失败 → WARNING + 后续段裸跑）
+        if ref_pending and len(chunk_text) >= config.TEXT_CHUNK_REF_MIN_CHARS:
+            try:
+                ref_smp = _MODEL.sample_audio_speaker(wav)
+                ref_txt = chunk_text
+                ref_pending = False
+                logger.info(
+                    "[chat_tts] ref-smp from chunk %d/%d (chars=%d) "
+                    "will be injected into subsequent chunks",
+                    i + 1, n, len(chunk_text),
+                )
+            except Exception as e:
+                logger.warning(
+                    "[chat_tts] sample_audio_speaker failed on chunk %d/%d: %s "
+                    "→ subsequent chunks will run without ref-smp",
+                    i + 1, n, e,
+                )
+                ref_pending = False
+
         # 合成阶段占进度的 0 → 0.6，enhance 留 0.6 → 1.0
         if on_progress:
             on_progress((i + 1) / n * 0.6)
