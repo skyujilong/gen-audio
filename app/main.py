@@ -18,8 +18,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import card_import, cards, draw, health, jobs, speakers, synthesize
+from . import config
 from .config import DB_PATH, DATA_ROOT, SPEAKERS_DIR, STATIC_DIR
-from .core import chat_tts
+from .core import chat_tts, text_norm
 from .core.exceptions import AppError
 from .core.queue import init_queue
 from .core.queue import shutdown as queue_shutdown
@@ -47,7 +48,7 @@ async def lifespan(app: FastAPI):
     log.info("数据库已就绪：%s", DB_PATH)
     log.info("音色库目录：%s", SPEAKERS_DIR)
 
-    async def _load_model_in_background() -> None:
+    async def _load_chatts_in_background() -> None:
         """后台加载 ChatTTS 模型：失败不影响应用启动。"""
         try:
             await asyncio.to_thread(chat_tts.load_model)
@@ -56,7 +57,20 @@ async def lifespan(app: FastAPI):
             # 不吞错：记日志，由 /api/health 暴露 loading 状态
             log.error("ChatTTS 模型加载失败：%s", e)
 
-    asyncio.create_task(_load_model_in_background())
+    async def _load_text_norm_in_background() -> None:
+        """后台编译 WeTextProcessing FST：5–30s。失败不阻塞，回退到原文 fallback。"""
+        if not config.TEXT_NORM_ENABLED:
+            log.info("TEXT_NORM_ENABLED=false，跳过 TN 加载")
+            return
+        try:
+            await asyncio.to_thread(text_norm.load_normalizer)
+            log.info("TN normalizer 加载完成（status=%s）", text_norm.status())
+        except Exception as e:
+            log.warning("TN normalizer 加载失败（fallback 到原文）：%s", e)
+
+    # 与 ChatTTS 模型并行加载 TN（互不阻塞）
+    asyncio.create_task(_load_chatts_in_background())
+    asyncio.create_task(_load_text_norm_in_background())
 
     # 初始化合成队列（启动 worker + 清理脏数据）
     init_queue(DB_PATH)
