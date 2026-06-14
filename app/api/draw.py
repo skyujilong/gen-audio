@@ -77,7 +77,7 @@ def draw(req: DrawRequest) -> DrawnCard:
         params=params_试听, text=demo_text,
     )
     srt = build_srt(
-        [(demo_text, segments[0][0], segments[0][1])]
+        [(demo_text, segments[0][1], segments[0][2])]
     ) if segments else ""
 
     # 3) 先 insert（路径占空）——Phase 4.1: 把 resolved_speaker_id 也写入
